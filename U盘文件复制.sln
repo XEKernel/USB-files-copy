@@ -3,7 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.12.35707.178 d17.12
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "U盘文件复制", "U盘文件复制.csproj", "{7CF4A057-CB3A-4670-A7DC-9A7528BDE5A5}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "U盘文件复制", "Client\U盘文件复制.csproj", "{7CF4A057-CB3A-4670-A7DC-9A7528BDE5A5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "U盘文件复制.Server", "Server\U盘文件复制.Server.csproj", "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -15,6 +17,10 @@ Global
 		{7CF4A057-CB3A-4670-A7DC-9A7528BDE5A5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7CF4A057-CB3A-4670-A7DC-9A7528BDE5A5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7CF4A057-CB3A-4670-A7DC-9A7528BDE5A5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
