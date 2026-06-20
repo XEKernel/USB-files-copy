@@ -119,5 +119,5 @@ jobs:
           ```
           默认监听 `http://localhost:5000`，Web 管理面板直接浏览器访问。
         draft: false
-        prerelease: true
+        prerelease: false
         files: USB-Files-Copy-${{ steps.timestamp.outputs.ts }}.zip
