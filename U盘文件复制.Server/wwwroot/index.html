@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>U盘文件复制器 - 管理面板</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="app">
+        <!-- 顶部导航 -->
+        <header class="topbar">
+            <div class="topbar-left">
+                <h1>USB文件管理面板</h1>
+            </div>
+            <div class="topbar-right">
+                <span id="connStatus" class="status-dot" title="连接状态">⚪</span>
+                <span id="connText">未连接</span>
+                <button id="connBtn" class="btn btn-sm">连接</button>
+                <button id="tokenBtn" class="btn btn-sm btn-outline">设置令牌</button>
+            </div>
+        </header>
+
+        <!-- 标签页导航 -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="browse">文件浏览</button>
+            <button class="tab" data-tab="upload">上传文件</button>
+            <button class="tab" data-tab="search">文件搜索</button>
+            <button class="tab" data-tab="stats">存储统计</button>
+        </nav>
+
+        <!-- ===== 文件浏览 ===== -->
+        <section id="tab-browse" class="tab-content active">
+            <div class="toolbar">
+                <div class="breadcrumb" id="breadcrumb">
+                    <span class="crumb" data-path="">📁 根目录</span>
+                </div>
+                <div class="toolbar-actions">
+                    <button id="refreshBtn" class="btn btn-sm">刷新</button>
+                    <label class="toggle-label">
+                        <input type="checkbox" id="recursiveToggle"> 递归
+                    </label>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table id="fileTable">
+                    <thead>
+                        <tr>
+                            <th style="width:40px"></th>
+                            <th>名称</th>
+                            <th style="width:100px">大小</th>
+                            <th style="width:160px">修改时间</th>
+                            <th style="width:140px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fileTableBody">
+                        <tr><td colspan="5" class="empty-msg">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div id="browsePager" class="pager"></div>
+        </section>
+
+        <!-- ===== 上传文件 ===== -->
+        <section id="tab-upload" class="tab-content">
+            <div class="card">
+                <h2>文件上传</h2>
+                <div class="form-row">
+                    <label>目标路径 (如: USB1/文档.docx)</label>
+                    <input type="text" id="uploadPath" placeholder="输入远程相对路径">
+                </div>
+                <div class="form-row">
+                    <label>选择文件</label>
+                    <div class="drop-zone" id="dropZone">
+                        <p>拖拽文件到此处或点击选择</p>
+                        <input type="file" id="uploadFileInput" hidden>
+                        <p id="dropFileInfo" class="file-info"></p>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <button id="uploadBtn" class="btn btn-primary" disabled>上传文件</button>
+                    <span id="uploadProgress" class="progress-text"></span>
+                </div>
+            </div>
+            <div class="card">
+                <h2>分块上传 (大文件)</h2>
+                <div class="form-row">
+                    <label>目标路径</label>
+                    <input type="text" id="chunkPath" placeholder="输入远程相对路径">
+                </div>
+                <div class="form-row">
+                    <label>选择文件</label>
+                    <input type="file" id="chunkFileInput">
+                </div>
+                <div class="form-row inline">
+                    <label>分块大小 (MB)</label>
+                    <input type="number" id="chunkSizeMB" value="2" min="0.5" step="0.5" style="width:120px">
+                    <button id="chunkUploadBtn" class="btn btn-primary" disabled>开始分块上传</button>
+                </div>
+                <div id="chunkProgress" class="progress-text"></div>
+            </div>
+        </section>
+
+        <!-- ===== 搜索 ===== -->
+        <section id="tab-search" class="tab-content">
+            <div class="card">
+                <h2>文件搜索</h2>
+                <div class="search-bar">
+                    <input type="text" id="searchKeyword" placeholder="文件名关键词..." class="search-input">
+                    <input type="text" id="searchExt" placeholder="扩展名 (如 .txt)" class="search-ext">
+                    <input type="date" id="searchStart" title="起始日期">
+                    <input type="date" id="searchEnd" title="截止日期">
+                    <button id="searchBtn" class="btn btn-primary">搜索</button>
+                </div>
+            </div>
+            <div id="searchResults" class="table-wrap" style="display:none">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件名</th>
+                            <th>路径</th>
+                            <th style="width:100px">大小</th>
+                            <th style="width:160px">修改时间</th>
+                            <th style="width:140px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="searchTableBody"></tbody>
+                </table>
+            </div>
+            <div id="searchPager" class="pager"></div>
+        </section>
+
+        <!-- ===== 统计 ===== -->
+        <section id="tab-stats" class="tab-content">
+            <div class="stats-grid" id="statsGrid">
+                <div class="stat-card">
+                    <div class="stat-icon">📄</div>
+                    <div class="stat-value" id="statFiles">--</div>
+                    <div class="stat-label">文件总数</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">💾</div>
+                    <div class="stat-value" id="statSize">--</div>
+                    <div class="stat-label">已用空间</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🟢</div>
+                    <div class="stat-value" id="statFree">--</div>
+                    <div class="stat-label">可用空间</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">📊</div>
+                    <div class="stat-value" id="statUsage">--</div>
+                    <div class="stat-label">磁盘使用率</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">🧩</div>
+                    <div class="stat-value" id="statChunks">--</div>
+                    <div class="stat-label">未完成分块</div>
+                </div>
+            </div>
+            <div class="card" style="margin-top:20px">
+                <h2>维护操作</h2>
+                <button id="cleanupBtn" class="btn btn-outline">清理过期分块</button>
+                <span id="cleanupMsg" class="progress-text"></span>
+            </div>
+        </section>
+    </div>
+
+    <!-- 预览弹窗 -->
+    <div id="previewModal" class="modal" style="display:none">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="previewTitle">文件预览</h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="previewInfo" class="preview-info"></div>
+                <pre id="previewContent" class="preview-code"></pre>
+                <img id="previewImage" class="preview-img" style="display:none">
+                <div id="previewBinary" class="preview-binary" style="display:none">
+                    <p>此文件类型不支持在线预览</p>
+                    <button id="downloadBtn" class="btn btn-primary">下载文件</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/app.js"></script>
+</body>
+</html>

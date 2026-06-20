@@ -1,0 +1,39 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.cache
+*.tmp
+*.pidb
+*.pdb
+*.vshost.*
+*.nupkg
+*.metaproj
+*.metaproj.tmp
+
+# NuGet
+packages/
+*.nupkg
+# Keep nuget.exe
+!nuget.exe
+
+# VS / Rider
+.vs/
+.idea/
+*.sln.docstates
+*.sln.orig
+
+# 临时文件
+*.log
+*.tmp
+~$*
+
+# macOS
+.DS_Store
+
+# 服务端运行时文件
+U盘文件复制.Server/uploads/
+
+# WorkBuddy
+.workbuddy/memory/
