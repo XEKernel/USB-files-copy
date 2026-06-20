@@ -26,8 +26,10 @@ jobs:
       uses: microsoft/setup-msbuild@v2
 
     - name: 还原 NuGet 包
-      shell: cmd
-      run: nuget restore U盘文件复制.sln
+      shell: powershell
+      run: |
+        Invoke-WebRequest -UseBasicParsing -OutFile nuget.exe https://dist.nuget.org/win-x86-commandline/latest/nuget.exe
+        .\nuget.exe restore U盘文件复制.sln -NonInteractive
 
     - name: 编译客户端 (Release)
       shell: cmd
