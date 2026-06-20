@@ -27,7 +27,7 @@ jobs:
 
     - name: 编译客户端 (Release)
       shell: cmd
-      run: msbuild Client/U盘文件复制.csproj /t:Restore;Build /p:Configuration=Release /p:Platform="Any CPU"
+      run: msbuild Client/U盘文件复制.csproj /t:Restore;Build /p:Configuration=Release /p:Platform=AnyCPU
 
     - name: 收集客户端产物
       run: |
