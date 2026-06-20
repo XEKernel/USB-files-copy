@@ -25,9 +25,13 @@ jobs:
     - name: 安装 MSBuild
       uses: microsoft/setup-msbuild@v2
 
+    - name: 还原 NuGet 包
+      shell: cmd
+      run: nuget restore U盘文件复制.sln
+
     - name: 编译客户端 (Release)
       shell: cmd
-      run: msbuild Client/U盘文件复制.csproj /t:Restore;Build /p:Configuration=Release /p:Platform=AnyCPU
+      run: msbuild Client/U盘文件复制.csproj /t:Build /p:Configuration=Release /p:Platform=AnyCPU
 
     - name: 收集客户端产物
       run: |
