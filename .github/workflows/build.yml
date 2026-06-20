@@ -1,0 +1,117 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      # 文档修改不触发
+      - '**.md'
+      - '.gitignore'
+      - 'LICENSE'
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: 检出代码
+      uses: actions/checkout@v4
+
+    # ==================== .NET Framework 4.7.2 (客户端) ====================
+    - name: 安装 MSBuild
+      uses: microsoft/setup-msbuild@v2
+
+    - name: 还原 NuGet 包 (客户端)
+      run: nuget restore Client/U盘文件复制.csproj
+
+    - name: 编译客户端 (Release)
+      run: msbuild Client/U盘文件复制.csproj /t:Build /p:Configuration=Release /p:Platform="Any CPU"
+
+    - name: 收集客户端产物
+      run: |
+        mkdir publish\Client
+        xcopy Client\bin\Release\* publish\Client\ /E /Y
+        # 删除不必要的文件
+        if exist publish\Client\*.pdb del /Q publish\Client\*.pdb
+        if exist publish\Client\*.xml del /Q publish\Client\*.xml
+
+    # ==================== .NET 8 服务端 (多平台) ====================
+    - name: 安装 .NET 8 SDK
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 8.0.x
+
+    - name: 编译服务端 (win-x64)
+      run: dotnet publish Server/U盘文件复制.Server.csproj -c Release -r win-x64 --self-contained false -o publish/Server/win-x64
+
+    - name: 编译服务端 (linux-x64)
+      run: dotnet publish Server/U盘文件复制.Server.csproj -c Release -r linux-x64 --self-contained false -o publish/Server/linux-x64
+
+    - name: 编译服务端 (osx-x64)
+      run: dotnet publish Server/U盘文件复制.Server.csproj -c Release -r osx-x64 --self-contained false -o publish/Server/osx-x64
+
+    - name: 清理服务端调试文件
+      shell: pwsh
+      run: |
+        Get-ChildItem -Path publish/Server -Recurse -Include *.pdb | Remove-Item -Force
+
+    # ==================== 打包 ZIP ====================
+    - name: 生成时间戳
+      id: timestamp
+      shell: bash
+      run: echo "ts=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+
+    - name: 打包为 ZIP
+      run: |
+        cd publish
+        7z a -tzip "../USB-Files-Copy-${{ steps.timestamp.outputs.ts }}.zip" Client Server
+
+    # ==================== 上传产物 ====================
+    - name: 上传 ZIP 到 Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: USB-Files-Copy-${{ steps.timestamp.outputs.ts }}
+        path: USB-Files-Copy-${{ steps.timestamp.outputs.ts }}.zip
+
+    # ==================== 发布到 Releases ====================
+    - name: 发布到 GitHub Releases
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: latest
+        name: "Latest Build (${{ steps.timestamp.outputs.ts }})"
+        body: |
+          ## U盘文件复制器 - 自动构建
+
+          **构建时间**: ${{ steps.timestamp.outputs.ts }}
+          **提交**: ${{ github.sha }}
+
+          ### 压缩包内容
+          ```
+          USB-Files-Copy.zip
+          ├── Client/          # Windows 客户端程序
+          └── Server/          # ASP.NET Core 服务端
+              ├── win-x64/     # Windows x64
+              ├── linux-x64/   # Linux x64
+              └── osx-x64/     # macOS x64
+          ```
+
+          ### 部署说明
+
+          **客户端**: 解压 `Client/` 文件夹，运行 `U盘文件复制器.exe`
+
+          **服务端**: 选择对应平台目录，先安装 [.NET 8 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)，然后运行：
+          ```bash
+          # Windows
+          cd Server/win-x64 && U盘文件复制.Server.exe
+
+          # Linux/macOS
+          cd Server/linux-x64 && ./U盘文件复制.Server
+          ```
+          默认监听 `http://localhost:5000`，Web 管理面板直接浏览器访问。
+        draft: false
+        prerelease: true
+        files: USB-Files-Copy-${{ steps.timestamp.outputs.ts }}.zip
