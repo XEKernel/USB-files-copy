@@ -95,14 +95,18 @@ namespace U盘文件复制
             lock (_logBuffer)
             {
                 _logBuffer.AppendLine(entry);
-                var lines = _logBuffer.ToString().Split('\n');
-                _currentLogLines = lines.Length - 1;
+                _currentLogLines++;
 
                 if (_currentLogLines > MaxLogLines)
                 {
-                    var trimmed = string.Join("\n", lines.Skip(lines.Length - MaxLogLines - 1));
-                    _logBuffer.Clear();
-                    _logBuffer.Append(trimmed);
+                    // 截断最早的日志行，保留最后 MaxLogLines 行
+                    var full = _logBuffer.ToString();
+                    var newlineIdx = full.IndexOf('\n');
+                    if (newlineIdx >= 0)
+                    {
+                        _logBuffer.Clear();
+                        _logBuffer.Append(full.Substring(newlineIdx + 1));
+                    }
                     _currentLogLines = MaxLogLines;
                 }
             }

@@ -18,6 +18,7 @@ namespace U盘文件复制
         private readonly SemaphoreSlim _copyLock = new SemaphoreSlim(1, 1);
         private CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly Dictionary<string, DateTime> _driveInsertionTimes = new Dictionary<string, DateTime>();
+        private readonly Dictionary<string, string> _driveIdCache = new Dictionary<string, string>();
 
         /// <summary>
         /// 初始化USB监听器
@@ -169,14 +170,20 @@ namespace U盘文件复制
         /// </summary>
         private string GetDriveId(DriveInfo drive)
         {
+            string key = drive.Name.TrimEnd('\\');
+            if (_driveIdCache.TryGetValue(key, out var cached))
+                return cached;
+
             try
             {
                 using (var searcher = new ManagementObjectSearcher(
-                    $"SELECT VolumeSerialNumber FROM Win32_LogicalDisk WHERE DeviceID = '{drive.Name.TrimEnd('\\')}'"))
+                    $"SELECT VolumeSerialNumber FROM Win32_LogicalDisk WHERE DeviceID = '{key}'"))
                 {
                     foreach (ManagementObject disk in searcher.Get())
                     {
-                        return disk["VolumeSerialNumber"]?.ToString() ?? "UNKNOWN";
+                        var id = disk["VolumeSerialNumber"]?.ToString() ?? "UNKNOWN";
+                        _driveIdCache[key] = id;
+                        return id;
                     }
                 }
             }

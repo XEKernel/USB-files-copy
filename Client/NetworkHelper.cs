@@ -8,6 +8,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
 
 namespace U盘文件复制
 {
@@ -17,30 +18,29 @@ namespace U盘文件复制
     /// </summary>
     public static class NetworkHelper
     {
-        /// <summary>
-        /// 创建并配置一个 HttpClient 实例（基于 ServerConfig）
-        /// </summary>
-        private static HttpClient CreateClient(ServerConfig config)
+        /// <summary>共享 HttpClientHandler，避免 Socket 耗尽</summary>
+        private static readonly HttpClientHandler _sharedHandler = new HttpClientHandler
         {
-            var handler = new HttpClientHandler
-            {
-                AllowAutoRedirect = true,
-                UseProxy = true,
-            };
+            AllowAutoRedirect = true,
+            UseProxy = true,
+            ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
+        };
 
-            // 配置服务器证书验证
+        private static HttpClient GetClient(ServerConfig config)
+        {
+            var handler = _sharedHandler;
+
+            // 动态调整证书验证策略
             if (config.ValidateCertificate)
             {
-                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors)
-                    => sslPolicyErrors == System.Net.Security.SslPolicyErrors.None;
-            }
-            else
-            {
-                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors)
-                    => true;
+                handler = new HttpClientHandler
+                {
+                    AllowAutoRedirect = true,
+                    UseProxy = true,
+                };
             }
 
-            var client = new HttpClient(handler);
+            var client = new HttpClient(handler, disposeHandler: false);
             client.Timeout = TimeSpan.FromSeconds(config.TimeoutSeconds);
 
             // 认证头：优先使用令牌，否则使用密码（基本认证）
@@ -208,11 +208,10 @@ namespace U盘文件复制
                 {
                     var content = await response.Content.ReadAsStringAsync();
                     // 服务器返回 JSON 数组格式，例如 [0,2,5]
-                    var indices = content.Trim('[', ']').Split(new char[] { ',' }, StringSplitOptions.RemoveEmptyEntries);
+                    var indicesArray = JArray.Parse(content);
                     var set = new HashSet<int>();
-                    foreach (var idx in indices)
-                        if (int.TryParse(idx.Trim(), out int i))
-                            set.Add(i);
+                    foreach (var idx in indicesArray)
+                        set.Add((int)idx);
                     return set;
                 }
             }

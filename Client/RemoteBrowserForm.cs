@@ -99,7 +99,6 @@ namespace U盘文件复制
             _colPath = new ColumnHeader { Text = "路径", Width = 300 };
             _listView.Columns.AddRange(new[] { _colName, _colSize, _colDate, _colPath });
             _listView.DoubleClick += ListView_DoubleClick;
-            _listView.ColumnClick += ListView_ColumnClick;
 
             // 底部面板
             _bottomPanel = new Panel { Dock = DockStyle.Bottom, Height = 45, Padding = new Padding(10) };
@@ -245,11 +244,6 @@ namespace U盘文件复制
             }
         }
 
-        private void ListView_ColumnClick(object sender, ColumnClickEventArgs e)
-        {
-            // 简单排序占位
-        }
-
         private async Task DownloadSelectedFileAsync()
         {
             if (_listView.SelectedItems.Count == 0)
@@ -297,14 +291,14 @@ namespace U盘文件复制
 
         private async Task DownloadHttpFileAsync(string remotePath, string localPath)
         {
-            var configField = typeof(HttpFileDestination).GetField("_config",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-            if (configField == null) throw new InvalidOperationException("无法获取服务器配置");
-
-            var config = configField.GetValue(_destination) as ServerConfig;
-            if (config == null) throw new InvalidOperationException("服务器配置无效");
-
-            await NetworkHelper.DownloadFileAsync(config, remotePath, localPath, CancellationToken.None);
+            if (_destination is HttpFileDestination http)
+            {
+                await NetworkHelper.DownloadFileAsync(http.Config, remotePath, localPath, CancellationToken.None);
+            }
+            else
+            {
+                throw new InvalidOperationException("当前目标不支持 HTTP 下载");
+            }
         }
 
         private async Task DeleteSelectedFileAsync()

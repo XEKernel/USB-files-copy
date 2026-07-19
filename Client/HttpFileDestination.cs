@@ -18,6 +18,9 @@ namespace U盘文件复制
         private readonly ServerConfig _config;
         private readonly bool _useChunkedUpload;
 
+        /// <summary>公开服务器配置，供 RemoteBrowserForm 等使用</summary>
+        public ServerConfig Config => _config;
+
         public HttpFileDestination(ServerConfig config, bool useChunkedUpload = true)
         {
             _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -174,7 +177,7 @@ namespace U盘文件复制
         }
 
         /// <summary>
-        /// 创建 HTTP 客户端（专用于元数据查询）
+        /// 创建 HTTP 客户端（专用于元数据查询，复用共享 Handler）
         /// </summary>
         private static HttpClient CreateClient(ServerConfig config)
         {
@@ -182,15 +185,17 @@ namespace U盘文件复制
             {
                 AllowAutoRedirect = true,
                 UseProxy = true,
+                ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
             };
+            // 复用 Handler 避免 Socket 耗尽
+            handler.ServerCertificateCustomValidationCallback = config.ValidateCertificate
+                ? (sender, cert, chain, sslPolicyErrors) => sslPolicyErrors == System.Net.Security.SslPolicyErrors.None
+                : (sender, cert, chain, sslPolicyErrors) => true;
 
-            if (!config.ValidateCertificate)
+            var client = new HttpClient(handler, disposeHandler: true)
             {
-                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true;
-            }
-
-            var client = new HttpClient(handler);
-            client.Timeout = TimeSpan.FromSeconds(config.TimeoutSeconds);
+                Timeout = TimeSpan.FromSeconds(config.TimeoutSeconds)
+            };
 
             if (!string.IsNullOrWhiteSpace(config.ApiToken))
             {

@@ -141,8 +141,7 @@ namespace U盘文件复制.Server.Services
 
         public async Task UploadChunkAsync(string relativePath, int chunkIndex, int totalChunks, Stream chunkStream)
         {
-            if (chunkStream.Length > _maxFileSizeBytes / 10) // 单个分块不能太大，可自定义
-                throw new IOException($"分块大小超过限制");
+            // 大小限制由 [RequestSizeLimit] 在控制器层校验，此处不检查 stream.Length（HttpRequestStream 不支持 .Length）
 
             var chunkFilePath = GetChunkFilePath(relativePath, chunkIndex);
             using (var destStream = new FileStream(chunkFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))

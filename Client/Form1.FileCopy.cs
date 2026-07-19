@@ -19,8 +19,6 @@ namespace U盘文件复制
         private int _totalFiles = 0;
         private int _successCount = 0;
         private int _failureCount = 0;
-        private readonly Stopwatch _speedTimer = new Stopwatch();
-        private long _bytesCopiedInCurrentSecond = 0;
         private int _currentSpeedLimit = 2 * 1024 * 1024; // 默认2 MB/秒
 
         /// <summary>
@@ -46,7 +44,7 @@ namespace U盘文件复制
             try
             {
                 _cts.Token.ThrowIfCancellationRequested();
-                _logPath = Path.Combine(textBox2.Text, "CopyLog.txt");
+                _logPath = GetLogFilePath(destination);
                 LogMessage($"==== 开始复制 {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====", true);
 
                 _totalFiles = 0;
@@ -75,10 +73,14 @@ namespace U盘文件复制
                     if (destination is LocalFileDestination && _createDirectoryTree)
                         await RecordDirectoryTree(drive);
 
-                    if (ContainsStopFile(drive))
+                    if (ContainsSpecialFile(drive, out var actionType))
                     {
-                        LogMessage($"检测到阻止复制文件，跳过该U盘：{drive.Name}", true);
-                        continue;
+                        if (actionType == FileActionType.StopCopy)
+                        {
+                            LogMessage($"检测到阻止复制文件，跳过该U盘：{drive.Name}", true);
+                            continue;
+                        }
+                        // ReverseCopy 已在 HandleUsbEvent 中处理，此处不应到达
                     }
 
                     // 构造相对根路径：本地模式用绝对路径，远程模式只用文件夹名（服务器有自己的存储根）
@@ -390,49 +392,70 @@ namespace U盘文件复制
         }
 
         /// <summary>
-        /// 限速复制：分块读取本地文件，并通过目标写入（为了限速，需要手动控制上传速率）
+        /// 限速复制：通过节流 Stream 控制上传速率，避免缓冲整个文件
         /// </summary>
         private async Task CopyWithSpeedLimitAsync(Stream source, IFileDestination destination, string remotePath, int speedLimitBytesPerSecond, int bufferSize)
         {
-            byte[] buffer = new byte[bufferSize];
-            int bytesRead;
-
-            if (!_speedTimer.IsRunning)
+            using (var throttled = new ThrottledStream(source, speedLimitBytesPerSecond))
             {
-                _speedTimer.Restart();
-                _bytesCopiedInCurrentSecond = 0;
+                await destination.WriteFileAsync(remotePath, throttled, _cts.Token);
+            }
+        }
+
+        /// <summary>
+        /// 限速流包装器：限制底层流的读取速率
+        /// </summary>
+        private sealed class ThrottledStream : Stream
+        {
+            private readonly Stream _inner;
+            private readonly int _bytesPerSecond;
+            private readonly Stopwatch _timer = new Stopwatch();
+            private long _bytesThisSecond;
+
+            public ThrottledStream(Stream inner, int bytesPerSecond)
+            {
+                _inner = inner;
+                _bytesPerSecond = bytesPerSecond;
             }
 
-            // 使用 MemoryStream 累积数据，模拟限速（实际上 WriteFileAsync 会一次性上传整个流）
-            // 简单实现：每读取一定数据，延迟一段时间
-            using (var memoryStream = new MemoryStream())
+            public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
             {
-                while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length, _cts.Token)) > 0)
-                {
-                    await memoryStream.WriteAsync(buffer, 0, bytesRead, _cts.Token);
-                    _bytesCopiedInCurrentSecond += bytesRead;
+                int maxRead = Math.Min(count, _bytesPerSecond);
+                if (!_timer.IsRunning) _timer.Restart();
 
-                    if (_speedTimer.ElapsedMilliseconds < 1000)
-                    {
-                        if (_bytesCopiedInCurrentSecond >= speedLimitBytesPerSecond)
-                        {
-                            int waitTime = 1000 - (int)_speedTimer.ElapsedMilliseconds;
-                            if (waitTime > 0)
-                            {
-                                await Task.Delay(waitTime, _cts.Token);
-                            }
-                            _speedTimer.Restart();
-                            _bytesCopiedInCurrentSecond = 0;
-                        }
-                    }
-                    else
-                    {
-                        _speedTimer.Restart();
-                        _bytesCopiedInCurrentSecond = bytesRead;
-                    }
+                if (_bytesThisSecond >= _bytesPerSecond && _timer.ElapsedMilliseconds < 1000)
+                {
+                    int delay = 1000 - (int)_timer.ElapsedMilliseconds;
+                    if (delay > 0) await Task.Delay(delay, ct);
+                    _timer.Restart();
+                    _bytesThisSecond = 0;
                 }
-                memoryStream.Seek(0, SeekOrigin.Begin);
-                await destination.WriteFileAsync(remotePath, memoryStream, _cts.Token);
+                else if (_timer.ElapsedMilliseconds >= 1000)
+                {
+                    _timer.Restart();
+                    _bytesThisSecond = 0;
+                }
+
+                int actualRead = await _inner.ReadAsync(buffer, offset, Math.Min(maxRead, count), ct);
+                _bytesThisSecond += actualRead;
+                return actualRead;
+            }
+
+            public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+            public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+            public override void Flush() { }
+            public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+            public override void SetLength(long value) => throw new NotSupportedException();
+            public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing) _inner.Dispose();
+                base.Dispose(disposing);
             }
         }
 
@@ -478,76 +501,6 @@ namespace U盘文件复制
             return DuplicateFileAction.Skip;
         }
 
-        private string GetUniqueFileName(string originalPath)
-        {
-            int counter = 1;
-            string directory = Path.GetDirectoryName(originalPath);
-            string fileName = Path.GetFileNameWithoutExtension(originalPath);
-            string extension = Path.GetExtension(originalPath);
-
-            while (File.Exists(originalPath))
-            {
-                string newFileName = $"{fileName} ({counter++}){extension}";
-                originalPath = Path.Combine(directory, newFileName);
-            }
-            return originalPath;
-        }
-
-        /// <summary>
-        /// 比较两个文件是否内容相同（先比较大小，再比较哈希）
-        /// </summary>
-        private bool AreFilesIdentical(string filePath1, string filePath2)
-        {
-            try
-            {
-                // 先比较文件大小（快速判断）
-                var fileInfo1 = new FileInfo(filePath1);
-                var fileInfo2 = new FileInfo(filePath2);
-
-                if (fileInfo1.Length != fileInfo2.Length)
-                {
-                    return false;
-                }
-
-                // 大小相同，计算哈希比较
-                using (var sha256 = System.Security.Cryptography.SHA256.Create())
-                {
-                    byte[] hash1, hash2;
-
-                    using (var stream1 = File.OpenRead(filePath1))
-                    {
-                        hash1 = sha256.ComputeHash(stream1);
-                    }
-
-                    using (var stream2 = File.OpenRead(filePath2))
-                    {
-                        hash2 = sha256.ComputeHash(stream2);
-                    }
-
-                    // 比较哈希值
-                    if (hash1.Length != hash2.Length)
-                    {
-                        return false;
-                    }
-
-                    for (int i = 0; i < hash1.Length; i++)
-                    {
-                        if (hash1[i] != hash2[i])
-                        {
-                            return false;
-                        }
-                    }
-
-                    return true;
-                }
-            }
-            catch (Exception ex)
-            {
-                LogMessage($"文件比较失败：{filePath1} | 错误：{ex.Message}", true);
-                return false;
-            }
-        }
-
         private void UpdateCountDisplay()
         {
             int total = Interlocked.CompareExchange(ref _totalFiles, 0, 0);
@@ -576,6 +529,16 @@ namespace U盘文件复制
                 action();
                 return Task.CompletedTask;
             }
+        }
+
+        private string GetLogFilePath(IFileDestination destination)
+        {
+            // 本地模式：使用用户指定的目标目录
+            if (destination is LocalFileDestination)
+                return Path.Combine(textBox2.Text, "CopyLog.txt");
+
+            // 远程模式：使用程序运行目录
+            return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CopyLog.txt");
         }
 
         private bool ValidateTargetDirectory()
@@ -695,40 +658,6 @@ namespace U盘文件复制
             catch (Exception ex)
             {
                 writer.WriteLine($"{new string(' ', level * 2)}│   └── [错误: {ex.Message}]");
-            }
-        }
-
-        private bool ContainsStopFile(DriveInfo drive)
-        {
-            try
-            {
-                if (_stopCopyWhenFileExists)
-                {
-                    string stopFilePath = Path.Combine(drive.RootDirectory.FullName, _stopCopyFileName);
-                    if (File.Exists(stopFilePath))
-                    {
-                        LogMessage($"检测到停止复制文件: {_stopCopyFileName}", true);
-                        return true;
-                    }
-                }
-
-                if (_reverseCopyWhenFileExists)
-                {
-                    string reverseFilePath = Path.Combine(drive.RootDirectory.FullName, _reverseCopyFileName);
-                    if (File.Exists(reverseFilePath))
-                    {
-                        LogMessage($"检测到反向复制文件: {_reverseCopyFileName}", true);
-                        return true;
-                    }
-                }
-
-                string legacyStopPath = Path.Combine(drive.RootDirectory.FullName, _reverseCopyIndicator);
-                return File.Exists(legacyStopPath);
-            }
-            catch (Exception ex)
-            {
-                LogMessage($"检查特殊文件时出错：{ex.Message}", true);
-                return false;
             }
         }
 
