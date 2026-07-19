@@ -10,12 +10,13 @@ namespace U盘文件复制.Server.Middleware
     public class ApiKeyAuthMiddleware
     {
         private readonly RequestDelegate _next;
-        private readonly IConfiguration _configuration;
+        private readonly string[] _allowedTokens;
 
         public ApiKeyAuthMiddleware(RequestDelegate next, IConfiguration configuration)
         {
             _next = next;
-            _configuration = configuration;
+            // 启动时一次性读取令牌列表，避免每请求读取配置
+            _allowedTokens = configuration.GetSection("FileStorage:AllowedTokens").Get<string[]>() ?? Array.Empty<string>();
         }
 
         public async Task InvokeAsync(HttpContext context)
@@ -34,9 +35,6 @@ namespace U盘文件复制.Server.Middleware
                 return;
             }
 
-            // 从配置中读取允许的令牌列表
-            var allowedTokens = _configuration.GetSection("FileStorage:AllowedTokens").Get<string[]>() ?? Array.Empty<string>();
-
             if (!context.Request.Headers.TryGetValue("Authorization", out StringValues authHeader))
             {
                 context.Response.StatusCode = 401;
@@ -53,7 +51,7 @@ namespace U盘文件复制.Server.Middleware
             }
 
             var token = authValue.Substring("Bearer ".Length).Trim();
-            if (string.IsNullOrWhiteSpace(token) || !allowedTokens.Contains(token))
+            if (string.IsNullOrWhiteSpace(token) || !_allowedTokens.Contains(token))
             {
                 context.Response.StatusCode = 401;
                 await context.Response.WriteAsync("无效的令牌");

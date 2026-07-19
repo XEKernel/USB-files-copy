@@ -44,51 +44,57 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = maxFileSizeBytes;
 });
 
-// 6. 配置 Swagger（支持 Bearer 令牌输入）
+// 6. Swagger（仅开发环境注册，减少生产环境开销）
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c =>
+if (builder.Environment.IsDevelopment())
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "U盘文件复制器 API", Version = "v1" });
-    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    builder.Services.AddSwaggerGen(c =>
     {
-        Description = "请输入令牌: Bearer {your-token}",
-        Name = "Authorization",
-        In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
-    });
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
-    {
+        c.SwaggerDoc("v1", new OpenApiInfo { Title = "U盘文件复制器 API", Version = "v1" });
+        c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
         {
-            new OpenApiSecurityScheme
+            Description = "请输入令牌: Bearer {your-token}",
+            Name = "Authorization",
+            In = ParameterLocation.Header,
+            Type = SecuritySchemeType.ApiKey,
+            Scheme = "Bearer"
+        });
+        c.AddSecurityRequirement(new OpenApiSecurityRequirement
+        {
             {
-                Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
-            },
-            Array.Empty<string>()
-        }
+                new OpenApiSecurityScheme
+                {
+                    Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "Bearer" }
+                },
+                Array.Empty<string>()
+            }
+        });
     });
-});
+}
 
 var app = builder.Build();
 
 // ===== 中间件管道（顺序很重要） =====
 
-// 7. 异常处理（生产环境返回 JSON 错误信息）
-if (!app.Environment.IsDevelopment())
-{
-    app.UseExceptionHandler(errorApp =>
+// 7. 异常处理（所有环境，返回 JSON 错误信息）
+app.UseExceptionHandler(errorApp =>
     {
         errorApp.Run(async context =>
         {
-            context.Response.StatusCode = 500;
             context.Response.ContentType = "application/json";
             var feature = context.Features.Get<Microsoft.AspNetCore.Diagnostics.IExceptionHandlerFeature>();
-            var errorMessage = feature?.Error?.Message ?? "服务器内部错误";
+            var ex = feature?.Error;
+            var statusCode = ex switch
+            {
+                UnauthorizedAccessException => 403,
+                FileNotFoundException => 404,
+                _ => 500
+            };
+            context.Response.StatusCode = statusCode;
             await context.Response.WriteAsync(
-                System.Text.Json.JsonSerializer.Serialize(new { error = errorMessage }));
+                System.Text.Json.JsonSerializer.Serialize(new { error = ex?.Message ?? "服务器内部错误" }));
         });
     });
-}
 
 // 8. CORS（放在认证之前）
 app.UseCors("DefaultPolicy");

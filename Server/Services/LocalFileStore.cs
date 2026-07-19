@@ -172,6 +172,14 @@ namespace U盘文件复制.Server.Services
                 }
             }
 
+            // 验证合并后文件大小不超过限制
+            var finalInfo = new FileInfo(fullTargetPath);
+            if (finalInfo.Exists && finalInfo.Length > _maxFileSizeBytes)
+            {
+                File.Delete(fullTargetPath);
+                throw new IOException($"合并后文件大小 ({finalInfo.Length} 字节) 超过限制 ({_maxFileSizeBytes} 字节)");
+            }
+
             // 合并完成后删除临时分块文件
             for (int i = 0; i < totalChunks; i++)
             {
@@ -196,68 +204,50 @@ namespace U盘文件复制.Server.Services
 
         public Task<List<FileMetadata>> ListFilesAsync(string relativePath = "", bool recursive = false)
         {
-            var results = new List<FileMetadata>();
-            try
+            return Task.Run(() =>
             {
-                var searchPath = string.IsNullOrWhiteSpace(relativePath)
-                    ? _rootPath
-                    : GetSafeFullPath(relativePath);
-                var dir = new DirectoryInfo(searchPath);
-
-                if (!dir.Exists)
-                    return Task.FromResult(results);
-
-                var searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-
-                // 列出文件（排除临时分块文件夹）
-                foreach (var file in dir.EnumerateFiles("*", searchOption))
+                var results = new List<FileMetadata>();
+                try
                 {
-                    // 跳过临时分块目录下的文件
-                    if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
-                        continue;
+                    var searchPath = string.IsNullOrWhiteSpace(relativePath)
+                        ? _rootPath
+                        : GetSafeFullPath(relativePath);
+                    var dir = new DirectoryInfo(searchPath);
 
-                    var relPath = file.FullName
-                        .Substring(_rootPath.Length)
-                        .TrimStart(Path.DirectorySeparatorChar)
-                        .Replace('\\', '/');
+                    if (!dir.Exists) return results;
 
-                    results.Add(new FileMetadata
+                    var searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+
+                    foreach (var file in dir.EnumerateFiles("*", searchOption))
                     {
-                        Path = relPath,
-                        Name = file.Name,
-                        SizeBytes = file.Length,
-                        LastWriteTimeUtc = file.LastWriteTimeUtc,
-                        IsDirectory = false
-                    });
-                }
-
-                // 列出子目录（非递归模式下）
-                if (!recursive)
-                {
-                    foreach (var subDir in dir.EnumerateDirectories())
-                    {
-                        var relPath = subDir.FullName
-                            .Substring(_rootPath.Length)
-                            .TrimStart(Path.DirectorySeparatorChar)
-                            .Replace('\\', '/');
-
+                        if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
+                            continue;
                         results.Add(new FileMetadata
                         {
-                            Path = relPath + "/",
-                            Name = subDir.Name,
-                            SizeBytes = 0,
-                            LastWriteTimeUtc = subDir.LastWriteTimeUtc,
-                            IsDirectory = true
+                            Path = file.FullName.Substring(_rootPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/'),
+                            Name = file.Name, SizeBytes = file.Length,
+                            LastWriteTimeUtc = file.LastWriteTimeUtc, IsDirectory = false
                         });
                     }
-                }
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // 跳过无权访问的目录
-            }
 
-            return Task.FromResult(results);
+                    if (!recursive)
+                    {
+                        foreach (var subDir in dir.EnumerateDirectories())
+                            results.Add(new FileMetadata
+                            {
+                                Path = subDir.FullName.Substring(_rootPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/') + "/",
+                                Name = subDir.Name, SizeBytes = 0,
+                                LastWriteTimeUtc = subDir.LastWriteTimeUtc, IsDirectory = true
+                            });
+                    }
+                }
+                catch (UnauthorizedAccessException) { }
+
+                return results
+                    .OrderByDescending(f => f.IsDirectory)
+                    .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            });
         }
 
         public Task<(Stream fileStream, long fileSize, DateTime lastModifiedUtc)> OpenFileForReadAsync(string relativePath)
@@ -268,179 +258,127 @@ namespace U盘文件复制.Server.Services
 
             var fileInfo = new FileInfo(fullPath);
             var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, FileOptions.Asynchronous);
-            
             return Task.FromResult(((Stream)stream, fileInfo.Length, fileInfo.LastWriteTimeUtc));
         }
 
         public Task<StorageStats> GetStatsAsync()
         {
-            var stats = new StorageStats();
-            try
+            return Task.Run(() =>
             {
-                // 计算文件总数和总大小
-                var rootDir = new DirectoryInfo(_rootPath);
-                if (rootDir.Exists)
+                var stats = new StorageStats();
+                try
                 {
-                    foreach (var file in rootDir.EnumerateFiles("*", SearchOption.AllDirectories))
+                    var rootDir = new DirectoryInfo(_rootPath);
+                    if (rootDir.Exists)
                     {
-                        // 跳过临时分块目录
-                        if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
-                            continue;
-
-                        stats.TotalFiles++;
-                        stats.TotalSizeBytes += file.Length;
+                        foreach (var file in rootDir.EnumerateFiles("*", SearchOption.AllDirectories))
+                        {
+                            if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
+                                continue;
+                            stats.TotalFiles++;
+                            stats.TotalSizeBytes += file.Length;
+                        }
                     }
-                }
 
-                // 获取磁盘信息
-                var rootPath = Path.GetPathRoot(_rootPath);
-                if (!string.IsNullOrEmpty(rootPath))
-                {
-                    var rootDrive = new DriveInfo(rootPath);
-                    stats.AvailableDiskBytes = rootDrive.AvailableFreeSpace;
-                    stats.TotalDiskBytes = rootDrive.TotalSize;
-                }
+                    var driveRoot = Path.GetPathRoot(_rootPath);
+                    if (!string.IsNullOrEmpty(driveRoot))
+                    {
+                        var rootDrive = new DriveInfo(driveRoot);
+                        stats.AvailableDiskBytes = rootDrive.AvailableFreeSpace;
+                        stats.TotalDiskBytes = rootDrive.TotalSize;
+                    }
 
-                // 统计未完成的分块
-                var chunkRoot = Path.Combine(_rootPath, _tempChunkFolder);
-                if (Directory.Exists(chunkRoot))
-                {
-                    stats.PendingChunks = Directory.EnumerateFiles(chunkRoot, "*.part_*", SearchOption.AllDirectories).Count();
+                    var chunkRoot = Path.Combine(_rootPath, _tempChunkFolder);
+                    if (Directory.Exists(chunkRoot))
+                        stats.PendingChunks = Directory.EnumerateFiles(chunkRoot, "*.part_*", SearchOption.AllDirectories).Count();
                 }
-            }
-            catch
-            {
-                // 统计过程出错，返回部分数据
-            }
-
-            return Task.FromResult(stats);
+                catch { }
+                return stats;
+            });
         }
 
         public Task<int> CleanupStaleChunksAsync(TimeSpan olderThan)
         {
-            int cleaned = 0;
-            try
+            return Task.Run(() =>
             {
-                var chunkRoot = Path.Combine(_rootPath, _tempChunkFolder);
-                if (!Directory.Exists(chunkRoot))
-                    return Task.FromResult(0);
-
-                var cutoffTime = DateTime.UtcNow - olderThan;
-                var chunkFiles = Directory.EnumerateFiles(chunkRoot, "*.part_*", SearchOption.AllDirectories);
-
-                foreach (var file in chunkFiles)
+                int cleaned = 0;
+                try
                 {
-                    try
+                    var chunkRoot = Path.Combine(_rootPath, _tempChunkFolder);
+                    if (!Directory.Exists(chunkRoot)) return 0;
+
+                    var cutoffTime = DateTime.UtcNow - olderThan;
+                    var chunkFiles = Directory.EnumerateFiles(chunkRoot, "*.part_*", SearchOption.AllDirectories);
+
+                    foreach (var file in chunkFiles)
                     {
-                        if (File.GetLastWriteTimeUtc(file) < cutoffTime)
+                        try
                         {
-                            File.Delete(file);
-                            cleaned++;
+                            if (File.GetLastWriteTimeUtc(file) < cutoffTime) { File.Delete(file); cleaned++; }
                         }
+                        catch { }
                     }
-                    catch { }
-                }
 
-                // 清理空目录
-                foreach (var dir in Directory.EnumerateDirectories(chunkRoot, "*", SearchOption.AllDirectories)
-                    .OrderByDescending(d => d.Length))
-                {
-                    try
+                    foreach (var dir in Directory.EnumerateDirectories(chunkRoot, "*", SearchOption.AllDirectories)
+                        .OrderByDescending(d => d.Length))
                     {
-                        if (!Directory.EnumerateFileSystemEntries(dir).Any())
-                            Directory.Delete(dir);
+                        try { if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir); }
+                        catch { }
                     }
-                    catch { }
                 }
-            }
-            catch { }
-
-            return Task.FromResult(cleaned);
+                catch { }
+                return cleaned;
+            });
         }
 
         public Task<SearchResult> SearchFilesAsync(
-            string keyword = "",
-            string extension = "",
-            DateTime? startDate = null,
-            DateTime? endDate = null,
-            bool recursive = true,
-            int page = 1,
-            int pageSize = 100)
+            string keyword = "", string extension = "",
+            DateTime? startDate = null, DateTime? endDate = null,
+            bool recursive = true, int page = 1, int pageSize = 100)
         {
-            var allResults = new List<FileMetadata>();
-            try
+            return Task.Run(() =>
             {
-                var rootDir = new DirectoryInfo(_rootPath);
-                if (!rootDir.Exists)
-                    return Task.FromResult(new SearchResult());
-
-                var searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
-
-                foreach (var file in rootDir.EnumerateFiles("*", searchOption))
+                var allResults = new List<FileMetadata>();
+                try
                 {
-                    // 跳过临时分块目录
-                    if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
-                        continue;
+                    var rootDir = new DirectoryInfo(_rootPath);
+                    if (!rootDir.Exists) return new SearchResult();
 
-                    // 关键词过滤
-                    if (!string.IsNullOrWhiteSpace(keyword))
+                    var searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+
+                    foreach (var file in rootDir.EnumerateFiles("*", searchOption))
                     {
-                        if (file.Name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0)
+                        if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
                             continue;
+                        if (!string.IsNullOrWhiteSpace(keyword) && file.Name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0)
+                            continue;
+                        if (!string.IsNullOrWhiteSpace(extension))
+                        {
+                            var ext = extension.StartsWith(".") ? extension : "." + extension;
+                            if (!file.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase)) continue;
+                        }
+                        if (startDate.HasValue && file.LastWriteTimeUtc < startDate.Value) continue;
+                        if (endDate.HasValue && file.LastWriteTimeUtc > endDate.Value) continue;
+
+                        allResults.Add(new FileMetadata
+                        {
+                            Path = file.FullName.Substring(_rootPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/'),
+                            Name = file.Name, SizeBytes = file.Length,
+                            LastWriteTimeUtc = file.LastWriteTimeUtc, IsDirectory = false
+                        });
                     }
 
-                    // 扩展名过滤
-                    if (!string.IsNullOrWhiteSpace(extension))
+                    allResults = allResults.OrderByDescending(f => f.LastWriteTimeUtc).ToList();
+                    var total = allResults.Count;
+                    return new SearchResult
                     {
-                        var ext = extension.StartsWith(".") ? extension : "." + extension;
-                        if (!file.Extension.Equals(ext, StringComparison.OrdinalIgnoreCase))
-                            continue;
-                    }
-
-                    // 日期范围过滤
-                    if (startDate.HasValue && file.LastWriteTimeUtc < startDate.Value)
-                        continue;
-                    if (endDate.HasValue && file.LastWriteTimeUtc > endDate.Value)
-                        continue;
-
-                    var relPath = file.FullName
-                        .Substring(_rootPath.Length)
-                        .TrimStart(Path.DirectorySeparatorChar)
-                        .Replace('\\', '/');
-
-                    allResults.Add(new FileMetadata
-                    {
-                        Path = relPath,
-                        Name = file.Name,
-                        SizeBytes = file.Length,
-                        LastWriteTimeUtc = file.LastWriteTimeUtc,
-                        IsDirectory = false
-                    });
+                        Total = total, Page = page, PageSize = pageSize,
+                        Items = allResults.Skip((page - 1) * pageSize).Take(pageSize).ToList()
+                    };
                 }
-
-                // 按修改时间倒序排列
-                allResults = allResults.OrderByDescending(f => f.LastWriteTimeUtc).ToList();
-
-                var total = allResults.Count;
-                var paged = allResults
-                    .Skip((page - 1) * pageSize)
-                    .Take(pageSize)
-                    .ToList();
-
-                return Task.FromResult(new SearchResult
-                {
-                    Total = total,
-                    Page = page,
-                    PageSize = pageSize,
-                    Items = paged
-                });
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // 跳过无权访问的目录
-            }
-
-            return Task.FromResult(new SearchResult());
+                catch (UnauthorizedAccessException) { }
+                return new SearchResult();
+            });
         }
     }
 }
