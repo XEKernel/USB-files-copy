@@ -66,38 +66,44 @@ jobs:
         Get-ChildItem -Path publish/Server -Recurse -Include *.pdb | Remove-Item -Force
 
     # ==================== 打包 ZIP ====================
-    - name: 生成时间戳
-      id: timestamp
-      shell: bash
-      run: echo "ts=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
+    - name: 提取版本号
+      id: version
+      shell: pwsh
+      run: |
+        $xml = [xml](Get-Content Client/U盘文件复制.csproj)
+        $ver = $xml.Project.PropertyGroup.ApplicationVersion
+        if (-not $ver) { $ver = "0.0.0.0" }
+        $ts = Get-Date -Format "yyyyMMdd-HHmmss"
+        echo "ver=$ver" >> $env:GITHUB_OUTPUT
+        echo "ts=$ts" >> $env:GITHUB_OUTPUT
 
     - name: 打包为 ZIP
       run: |
         cd publish
-        7z a -tzip "../USB-Files-Copy-${{ steps.timestamp.outputs.ts }}.zip" Client Server
+        7z a -tzip "../USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip" Client Server
 
     # ==================== 上传产物 ====================
     - name: 上传 ZIP 到 Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: USB-Files-Copy-${{ steps.timestamp.outputs.ts }}
-        path: USB-Files-Copy-${{ steps.timestamp.outputs.ts }}.zip
+        name: USB-Files-Copy-v${{ steps.version.outputs.ver }}
+        path: USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip
 
     # ==================== 发布到 Releases ====================
     - name: 发布到 GitHub Releases
       uses: softprops/action-gh-release@v2
       with:
-        tag_name: latest
-        name: "Latest Build (${{ steps.timestamp.outputs.ts }})"
+        tag_name: v${{ steps.version.outputs.ver }}
+        name: "v${{ steps.version.outputs.ver }}"
         body: |
-          ## U盘文件复制器 - 自动构建
+          ## U盘文件复制器 v${{ steps.version.outputs.ver }}
 
-          **构建时间**: ${{ steps.timestamp.outputs.ts }}
+          **构建时间**: ${{ steps.version.outputs.ts }}
           **提交**: ${{ github.sha }}
 
           ### 压缩包内容
           ```
-          USB-Files-Copy.zip
+          USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip
           ├── Client/          # Windows 客户端程序
           └── Server/          # ASP.NET Core 服务端
               ├── win-x64/     # Windows x64
@@ -120,4 +126,4 @@ jobs:
           默认监听 `http://localhost:5000`，Web 管理面板直接浏览器访问。
         draft: false
         prerelease: false
-        files: USB-Files-Copy-${{ steps.timestamp.outputs.ts }}.zip
+        files: USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip
