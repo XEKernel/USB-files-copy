@@ -26,7 +26,7 @@ namespace U盘文件复制
             ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
         };
 
-        private static HttpClient GetClient(ServerConfig config)
+        private static HttpClient CreateClient(ServerConfig config)
         {
             var handler = _sharedHandler;
 

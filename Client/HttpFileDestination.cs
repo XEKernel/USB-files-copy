@@ -185,12 +185,12 @@ namespace U盘文件复制
             {
                 AllowAutoRedirect = true,
                 UseProxy = true,
-                ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true
             };
-            // 复用 Handler 避免 Socket 耗尽
-            handler.ServerCertificateCustomValidationCallback = config.ValidateCertificate
-                ? (sender, cert, chain, sslPolicyErrors) => sslPolicyErrors == System.Net.Security.SslPolicyErrors.None
-                : (sender, cert, chain, sslPolicyErrors) => true;
+            // 证书验证策略
+            if (config.ValidateCertificate)
+                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => sslPolicyErrors == System.Net.Security.SslPolicyErrors.None;
+            else
+                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true;
 
             var client = new HttpClient(handler, disposeHandler: true)
             {
