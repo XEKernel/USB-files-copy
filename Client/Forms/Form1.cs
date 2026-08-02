@@ -57,6 +57,8 @@ namespace U盘文件复制
             SetupUsbSpecialSettingsControls();
             SetupFolderNameFilterControls();
             SetupAutoStartControls();
+            SetupNotifyControls();
+            SetupWhitelistControls();
 
             this.KeyPreview = true;
 
@@ -66,6 +68,12 @@ namespace U盘文件复制
 
             // 根据用户选择的保存位置创建对应的文件存储目标（本地或服务器）
             _currentDestination = CreateFileDestination();
+
+            // 初始化系统托盘图标
+            InitializeTrayIcon();
+
+            // 后台检查更新（不阻塞启动）
+            _ = CheckForUpdatesAsync();
 
             // 如果是隐藏模式启动，在窗口加载后隐藏
             if (_startHidden)
@@ -95,6 +103,7 @@ namespace U盘文件复制
             };
             _copyEngine.Log += (message, isError) => _logEngine.Write(message, isError);
             _copyEngine.CountsChanged += (total, success, failure) => UpdateCountDisplay(total, success, failure);
+            _copyEngine.CopyCompleted += ShowCompletionNotification;
         }
 
         /// <summary>

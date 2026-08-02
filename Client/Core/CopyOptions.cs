@@ -49,6 +49,9 @@ namespace U盘文件复制.Core
         /// <summary>限速值（字节/秒），由界面层依据用户选择传入</summary>
         public int SpeedLimitBytesPerSecond { get; set; } = 2 * 1024 * 1024;
 
+        /// <summary>是否启用目标盘空间预检（本地模式；不足时警告）</summary>
+        public bool CheckFreeSpace { get; set; } = true;
+
         /// <summary>是否启用"存在 stop 文件则停止复制"</summary>
         public bool StopCopyWhenFileExists { get; set; }
 
@@ -69,5 +72,14 @@ namespace U盘文件复制.Core
 
         /// <summary>重复文件处理方式</summary>
         public DuplicateFileAction DuplicateAction { get; set; } = DuplicateFileAction.Skip;
+
+        /// <summary>内容级去重：目标已存在且内容相同（SHA256）时跳过，避免重复备份（仅本地模式）</summary>
+        public bool CompareContent { get; set; } = true;
+
+        /// <summary>是否启用设备白名单（仅复制指定卷序列号的 U 盘）</summary>
+        public bool EnableWhitelist { get; set; }
+
+        /// <summary>允许复制的卷序列号列表</summary>
+        public List<string> WhitelistedDriveIds { get; set; } = new List<string>();
     }
 }

@@ -22,6 +22,9 @@ namespace U盘文件复制.Core
         /// <summary>计数变化事件：(totalFiles, successCount, failureCount)</summary>
         public event Action<int, int, int> CountsChanged;
 
+        /// <summary>复制任务完成事件：(totalFiles, successCount, failureCount)</summary>
+        public event Action<int, int, int> CopyCompleted;
+
         private const int NormalBufferSize = 81920; // 80KB
         private const int LimitedBufferSize = 4096; // 4KB
 
@@ -149,12 +152,43 @@ namespace U盘文件复制.Core
         }
 
         /// <summary>
+        /// 复制所有可移动驱动器到指定存储目标（托盘"立即复制"入口）
+        /// </summary>
+        public async Task CopyAllRemovableAsync(IFileDestination destination, CopyOptions options, CancellationToken ct)
+        {
+            ResetCounters();
+            foreach (var drive in GetRemovableDrives())
+            {
+                ct.ThrowIfCancellationRequested();
+                await CopyDriveAsync(drive, destination, options, ct);
+            }
+            RaiseCopyCompleted();
+        }
+
+        /// <summary>
         /// 复制单个可移动驱动器到指定存储目标
         /// </summary>
         public async Task CopyDriveAsync(DriveInfo drive, IFileDestination destination, CopyOptions options, CancellationToken ct)
         {
             ct.ThrowIfCancellationRequested();
             RaiseLog($"发现U盘：{drive.Name}", true);
+
+            // 设备白名单：仅复制允许的卷序列号
+            if (options.EnableWhitelist && options.WhitelistedDriveIds.Count > 0)
+            {
+                string driveId = GetDriveId(drive);
+                if (!options.WhitelistedDriveIds.Contains(driveId))
+                {
+                    RaiseLog($"U盘不在白名单中，跳过：{drive.Name} (ID: {driveId})", true);
+                    return;
+                }
+            }
+
+            // 目标盘空间预检（仅本地模式可检查；远程模式由服务端控制）
+            if (options.CheckFreeSpace && destination is LocalFileDestination localDest)
+            {
+                CheckTargetFreeSpace(drive, localDest.RootDirectory, options);
+            }
 
             // 记录目录树（仅本地存储支持）
             if (destination is LocalFileDestination && options.CreateDirectoryTree)
@@ -173,6 +207,65 @@ namespace U盘文件复制.Core
             // 相对根路径：统一使用文件夹名（本地模式 root 为目标目录，远程模式 root 为服务器存储根）
             string folderName = CreateDriveFolderName(drive, options);
             await CopyDirectoryAsync(drive.RootDirectory, folderName, options, destination, false, 0, ct);
+        }
+
+        /// <summary>
+        /// 目标盘空间预检：粗略统计源文件总大小并对比目标盘可用空间，不足时给出警告
+        /// </summary>
+        private void CheckTargetFreeSpace(DriveInfo sourceDrive, string targetRoot, CopyOptions options)
+        {
+            try
+            {
+                string targetDriveRoot = Path.GetPathRoot(targetRoot);
+                if (string.IsNullOrEmpty(targetDriveRoot))
+                    return;
+
+                var targetDrive = new DriveInfo(targetDriveRoot);
+                if (!targetDrive.IsReady)
+                    return;
+
+                long sourceBytes = EstimateSourceSize(sourceDrive.RootDirectory, options);
+                long available = targetDrive.AvailableFreeSpace;
+
+                if (available < sourceBytes)
+                {
+                    RaiseLog(
+                        $"警告：目标盘可用空间不足（需要约 {FormatBytes(sourceBytes)}，可用 {FormatBytes(available)}），复制可能失败",
+                        true);
+                }
+            }
+            catch (Exception ex)
+            {
+                RaiseLog($"空间预检失败：{ex.Message}", true);
+            }
+        }
+
+        /// <summary>
+        /// 粗略统计源目录下所有文件总大小（不应用过滤规则，估算偏大更保守）
+        /// </summary>
+        private long EstimateSourceSize(DirectoryInfo source, CopyOptions options)
+        {
+            long total = 0;
+            try
+            {
+                var searchOption = options.LimitDirectoryDepth ? SearchOption.TopDirectoryOnly : SearchOption.AllDirectories;
+                foreach (var file in source.EnumerateFiles("*", searchOption))
+                {
+                    if (FileCategories.SystemFiles.Contains(file.Name))
+                        continue;
+                    total += file.Length;
+                }
+            }
+            catch { }
+            return total;
+        }
+
+        private static string FormatBytes(long bytes)
+        {
+            if (bytes < 1024) return $"{bytes} B";
+            if (bytes < 1024 * 1024) return $"{bytes / 1024.0:F1} KB";
+            if (bytes < 1024L * 1024 * 1024) return $"{bytes / (1024.0 * 1024.0):F1} MB";
+            return $"{bytes / (1024.0 * 1024.0 * 1024.0):F2} GB";
         }
 
         /// <summary>
@@ -377,6 +470,20 @@ namespace U盘文件复制.Core
                         }
                         catch (NotSupportedException) { /* 服务器不支持 Last-Modified，忽略 */ }
                         catch (FileNotFoundException) { remoteExists = false; }
+                    }
+
+                    // 内容级去重（仅本地模式支持）：目标已存在且内容相同则跳过，避免重复备份
+                    if (remoteExists && options.CompareContent && destination is LocalFileDestination localDestForDedup)
+                    {
+                        string targetFullPath = Path.Combine(
+                            localDestForDedup.RootDirectory,
+                            relativeFilePath.Replace('/', Path.DirectorySeparatorChar));
+
+                        if (await FileHasher.AreFilesIdenticalAsync(file.FullName, targetFullPath, ct))
+                        {
+                            RaiseLog($"目标文件内容相同，跳过：{file.FullName}", false);
+                            return;
+                        }
                     }
 
                     var action = options.DuplicateAction;
@@ -656,6 +763,14 @@ namespace U盘文件复制.Core
             int success = Interlocked.CompareExchange(ref _successCount, 0, 0);
             int failure = Interlocked.CompareExchange(ref _failureCount, 0, 0);
             CountsChanged?.Invoke(total, success, failure);
+        }
+
+        private void RaiseCopyCompleted()
+        {
+            int total = Interlocked.CompareExchange(ref _totalFiles, 0, 0);
+            int success = Interlocked.CompareExchange(ref _successCount, 0, 0);
+            int failure = Interlocked.CompareExchange(ref _failureCount, 0, 0);
+            CopyCompleted?.Invoke(total, success, failure);
         }
 
         /// <summary>

@@ -7,13 +7,19 @@ using System.Threading.Tasks;
 namespace U盘文件复制.Server.Services
 {
     /// <summary>
-    /// 本地文件系统实现（支持分块上传、断点续传）
+    /// 本地文件系统实现（支持分块上传、断点续传、回收站软删除）
     /// </summary>
     public class LocalFileStore : IFileStore
     {
         private readonly string _rootPath;
         private readonly string _tempChunkFolder;
         private readonly long _maxFileSizeBytes;
+
+        /// <summary>回收站目录名（软删除文件存放处）</summary>
+        public const string TrashFolderName = ".trash";
+
+        /// <summary>SQLite 文件索引（搜索加速）</summary>
+        private readonly FileIndex _index;
 
         public LocalFileStore(string rootPath, string tempChunkFolder, long maxFileSizeBytes)
         {
@@ -23,6 +29,11 @@ namespace U盘文件复制.Server.Services
 
             // 确保存储根目录存在
             Directory.CreateDirectory(_rootPath);
+
+            // 初始化文件索引并后台全量构建（不阻塞启动）
+            _index = new FileIndex(Path.Combine(_rootPath, "fileindex.db"));
+            _index.Open();
+            Task.Run(() => _index.Rebuild(_rootPath, IsExcludedPath, null));
         }
 
         private string GetSafeFullPath(string relativePath)
@@ -108,18 +119,183 @@ namespace U盘文件复制.Server.Services
             {
                 await fileStream.CopyToAsync(destStream);
             }
+
+            // 增量更新索引
+            var fi = new FileInfo(fullPath);
+            _index.Upsert(relativePath.Replace('\\', '/'), fi.Name, fi.Length, fi.LastWriteTimeUtc);
         }
 
-        public Task DeleteFileAsync(string relativePath)
+        public async Task DeleteFileAsync(string relativePath)
+        {
+            var fullPath = GetSafeFullPath(relativePath);
+            if (!File.Exists(fullPath))
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
+            // 回收站内的文件：彻底删除（避免嵌套软删除）
+            if (relativePath.StartsWith(TrashFolderName + "/", StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(fullPath);
+                TryDeleteEmptyDirectories(Path.GetDirectoryName(fullPath));
+                _index.Remove(relativePath.Replace('\\', '/'));
+                await Task.CompletedTask;
+                return;
+            }
+
+            // 普通文件：软删除，移动到回收站 .trash/ 目录，可恢复
+            var trashPath = GetTrashPathFor(relativePath);
+            var trashDir = Path.GetDirectoryName(trashPath);
+            if (!string.IsNullOrEmpty(trashDir))
+                Directory.CreateDirectory(trashDir);
+
+            if (File.Exists(trashPath))
+                File.Delete(trashPath);   // 回收站内同名则覆盖（保留最新）
+            File.Move(fullPath, trashPath);
+            _index.Remove(relativePath.Replace('\\', '/'));
+            await Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// 计算回收站路径：.trash/原始相对路径；若已存在则文件名追加时间戳
+        /// </summary>
+        private string GetTrashPathFor(string relativePath)
+        {
+            var trashRoot = Path.Combine(_rootPath, TrashFolderName);
+            var trashFull = Path.Combine(trashRoot, relativePath.TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(trashFull))
+                return trashFull;
+
+            // 重名冲突：在文件名后追加时间戳
+            var dir = Path.GetDirectoryName(trashFull);
+            var name = Path.GetFileNameWithoutExtension(trashFull);
+            var ext = Path.GetExtension(trashFull);
+            return Path.Combine(dir ?? trashRoot, $"{name}_{DateTime.Now:yyyyMMddHHmmss}{ext}");
+        }
+
+        public Task<List<FileMetadata>> ListTrashAsync()
+        {
+            return Task.Run(() =>
+            {
+                var results = new List<FileMetadata>();
+                var trashRoot = Path.Combine(_rootPath, TrashFolderName);
+                var dir = new DirectoryInfo(trashRoot);
+                if (!dir.Exists)
+                    return results;
+
+                foreach (var file in dir.EnumerateFiles("*", SearchOption.AllDirectories))
+                {
+                    results.Add(new FileMetadata
+                    {
+                        // Path 为相对存储根的回收站路径（如 ".trash/a/b.txt"），用于恢复
+                        Path = file.FullName.Substring(_rootPath.Length).TrimStart(Path.DirectorySeparatorChar).Replace('\\', '/'),
+                        Name = file.Name,
+                        SizeBytes = file.Length,
+                        LastWriteTimeUtc = file.LastWriteTimeUtc,
+                        IsDirectory = false
+                    });
+                }
+                return results.OrderByDescending(f => f.LastWriteTimeUtc).ToList();
+            });
+        }
+
+        public Task RestoreFromTrashAsync(string trashRelativePath)
+        {
+            if (string.IsNullOrWhiteSpace(trashRelativePath))
+                throw new ArgumentException("路径不能为空", nameof(trashRelativePath));
+
+            // 仅允许恢复 .trash/ 下的文件，防止路径穿越
+            trashRelativePath = trashRelativePath.Replace('\\', '/').TrimStart('/');
+            if (!trashRelativePath.StartsWith(TrashFolderName + "/", StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("只能恢复回收站中的文件");
+
+            var trashFull = Path.GetFullPath(Path.Combine(_rootPath, trashRelativePath));
+            if (!trashFull.StartsWith(_rootPath, StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("路径遍历攻击");
+            if (!File.Exists(trashFull))
+                throw new FileNotFoundException("回收站中不存在该文件");
+
+            // 还原到原始路径（去掉 .trash/ 前缀）
+            var originalRelative = trashRelativePath.Substring(TrashFolderName.Length + 1);
+            var targetFull = GetSafeFullPath(originalRelative);
+            var targetDir = Path.GetDirectoryName(targetFull);
+            if (!string.IsNullOrEmpty(targetDir))
+                Directory.CreateDirectory(targetDir);
+
+            if (File.Exists(targetFull))
+                File.Delete(targetFull);   // 目标已存在则覆盖（保留恢复的最新版本）
+
+            File.Move(trashFull, targetFull);
+
+            // 索引：移除回收站记录，更新原位置记录
+            _index.Remove(trashRelativePath.Replace('\\', '/'));
+            if (File.Exists(targetFull))
+            {
+                var fi = new FileInfo(targetFull);
+                _index.Upsert(originalRelative.Replace('\\', '/'), fi.Name, fi.Length, fi.LastWriteTimeUtc);
+            }
+
+            // 尝试清理回收站中的空目录
+            TryDeleteEmptyDirectories(Path.GetDirectoryName(trashFull));
+            return Task.CompletedTask;
+        }
+
+        public Task<int> ClearTrashAsync(TimeSpan olderThan)
+        {
+            return Task.Run(() =>
+            {
+                int cleared = 0;
+                var trashRoot = Path.Combine(_rootPath, TrashFolderName);
+                if (!Directory.Exists(trashRoot)) return 0;
+
+                var cutoffTime = DateTime.UtcNow - olderThan;
+                foreach (var file in Directory.EnumerateFiles(trashRoot, "*", SearchOption.AllDirectories))
+                {
+                    try
+                    {
+                        if (File.GetLastWriteTimeUtc(file) < cutoffTime)
+                        {
+                            File.Delete(file);
+                            cleared++;
+                        }
+                    }
+                    catch { }
+                }
+                TryDeleteEmptyDirectories(trashRoot);
+                return cleared;
+            });
+        }
+
+        /// <summary>
+        /// 递归删除空目录（自底向上）
+        /// </summary>
+        private static void TryDeleteEmptyDirectories(string? startDir)
         {
             try
             {
-                var fullPath = GetSafeFullPath(relativePath);
-                if (File.Exists(fullPath))
-                    File.Delete(fullPath);
+                if (string.IsNullOrEmpty(startDir) || !Directory.Exists(startDir)) return;
+                foreach (var sub in Directory.EnumerateDirectories(startDir))
+                    TryDeleteEmptyDirectories(sub);
+                if (!Directory.EnumerateFileSystemEntries(startDir).Any())
+                    Directory.Delete(startDir);
             }
-            catch { /* 忽略删除失败 */ }
-            return Task.CompletedTask;
+            catch { }
+        }
+
+        /// <summary>
+        /// 排除临时分块目录与回收站目录
+        /// </summary>
+        private bool IsExcludedPath(string fullPath)
+        {
+            var normalized = fullPath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
+            string chunkMarker = Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar;
+            string trashMarker = Path.DirectorySeparatorChar + TrashFolderName + Path.DirectorySeparatorChar;
+
+            return normalized.IndexOf(chunkMarker, StringComparison.OrdinalIgnoreCase) >= 0
+                || normalized.IndexOf(trashMarker, StringComparison.OrdinalIgnoreCase) >= 0
+                || normalized.EndsWith(Path.DirectorySeparatorChar + _tempChunkFolder, StringComparison.OrdinalIgnoreCase)
+                || normalized.EndsWith(Path.DirectorySeparatorChar + TrashFolderName, StringComparison.OrdinalIgnoreCase);
         }
 
         public async Task<HashSet<int>> GetUploadedChunksAsync(string relativePath)
@@ -180,6 +356,10 @@ namespace U盘文件复制.Server.Services
                 throw new IOException($"合并后文件大小 ({finalInfo.Length} 字节) 超过限制 ({_maxFileSizeBytes} 字节)");
             }
 
+            // 合并完成：更新索引
+            if (finalInfo.Exists)
+                _index.Upsert(relativePath.Replace('\\', '/'), finalInfo.Name, finalInfo.Length, finalInfo.LastWriteTimeUtc);
+
             // 合并完成后删除临时分块文件
             for (int i = 0; i < totalChunks; i++)
             {
@@ -220,7 +400,7 @@ namespace U盘文件复制.Server.Services
 
                     foreach (var file in dir.EnumerateFiles("*", searchOption))
                     {
-                        if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
+                        if (IsExcludedPath(file.FullName))
                             continue;
                         results.Add(new FileMetadata
                         {
@@ -273,7 +453,7 @@ namespace U盘文件复制.Server.Services
                     {
                         foreach (var file in rootDir.EnumerateFiles("*", SearchOption.AllDirectories))
                         {
-                            if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
+                            if (IsExcludedPath(file.FullName))
                                 continue;
                             stats.TotalFiles++;
                             stats.TotalSizeBytes += file.Length;
@@ -336,6 +516,23 @@ namespace U盘文件复制.Server.Services
             DateTime? startDate = null, DateTime? endDate = null,
             bool recursive = true, int page = 1, int pageSize = 100)
         {
+            // 索引就绪时优先使用 SQLite 索引查询（性能远高于全盘扫描）
+            if (_index.IsReady)
+            {
+                var result = _index.Search(keyword, extension, startDate, endDate, page, pageSize);
+                if (result.HasValue)
+                {
+                    return Task.FromResult(new SearchResult
+                    {
+                        Total = result.Value.total,
+                        Page = page,
+                        PageSize = pageSize,
+                        Items = result.Value.items
+                    });
+                }
+            }
+
+            // 索引不可用时回退文件系统扫描
             return Task.Run(() =>
             {
                 var allResults = new List<FileMetadata>();
@@ -348,7 +545,7 @@ namespace U盘文件复制.Server.Services
 
                     foreach (var file in rootDir.EnumerateFiles("*", searchOption))
                     {
-                        if (file.FullName.Contains(Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar))
+                        if (IsExcludedPath(file.FullName))
                             continue;
                         if (!string.IsNullOrWhiteSpace(keyword) && file.Name.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0)
                             continue;

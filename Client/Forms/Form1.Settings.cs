@@ -77,6 +77,10 @@ namespace U盘文件复制
                     // 服务器相关
                     SaveLocation = rdoLocalSave.Checked ? 0 : 1,
                     UseChunkedUpload = chkChunkedUpload?.Checked ?? true,
+                    ShowTrayIcon = chkTrayIcon.Checked,
+                    ShowCompletionNotify = chkNotify.Checked,
+                    EnableWhitelist = chkWhitelist.Checked,
+                    WhitelistDriveIds = txtWhitelist.Text,
                     Server = new ServerConfig
                     {
                         ServerAddress = txtServerAddress.Text,
@@ -198,6 +202,14 @@ namespace U盘文件复制
                 // 分块上传开关
                 if (chkChunkedUpload != null)
                     chkChunkedUpload.Checked = settings.UseChunkedUpload;
+
+                // 托盘与通知开关
+                chkTrayIcon.Checked = settings.ShowTrayIcon;
+                chkNotify.Checked = settings.ShowCompletionNotify;
+
+                // 设备白名单
+                chkWhitelist.Checked = settings.EnableWhitelist;
+                txtWhitelist.Text = settings.WhitelistDriveIds ?? "";
             }
             catch (Exception ex)
             {
@@ -235,6 +247,8 @@ namespace U盘文件复制
                 ReverseCopyWhenFileExists = chkReverseCopy.Checked,
                 ReverseCopyFileName = txtReverseCopyFile.Text.Trim(),
                 DuplicateAction = GetDuplicateFileActionFromUi(),
+                EnableWhitelist = chkWhitelist.Checked,
+                WhitelistedDriveIds = ParseKeywords(txtWhitelist.Text),
             };
         }
 

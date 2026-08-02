@@ -77,6 +77,13 @@
             this.groupBox9 = new System.Windows.Forms.GroupBox();
             this.chkAutoStartHidden = new System.Windows.Forms.CheckBox();
             this.chkAutoStart = new System.Windows.Forms.CheckBox();
+            this.grpNotify = new System.Windows.Forms.GroupBox();
+            this.chkNotify = new System.Windows.Forms.CheckBox();
+            this.chkTrayIcon = new System.Windows.Forms.CheckBox();
+            this.grpWhitelist = new System.Windows.Forms.GroupBox();
+            this.label24 = new System.Windows.Forms.Label();
+            this.txtWhitelist = new System.Windows.Forms.TextBox();
+            this.chkWhitelist = new System.Windows.Forms.CheckBox();
             this.groupBox8 = new System.Windows.Forms.GroupBox();
             this.chkDepthLimit = new System.Windows.Forms.CheckBox();
             this.numMaxDepth = new System.Windows.Forms.NumericUpDown();
@@ -652,6 +659,8 @@
             // panel1
             // 
             this.panel1.AutoScroll = true;
+            this.panel1.Controls.Add(this.grpWhitelist);
+            this.panel1.Controls.Add(this.grpNotify);
             this.panel1.Controls.Add(this.groupBox9);
             this.panel1.Controls.Add(this.groupBox8);
             this.panel1.Controls.Add(this.groupBox7);
@@ -695,6 +704,75 @@
             this.chkAutoStart.TabIndex = 0;
             this.chkAutoStart.Text = "开机自启动";
             this.chkAutoStart.UseVisualStyleBackColor = true;
+            // 
+            // grpNotify
+            // 
+            this.grpNotify.Controls.Add(this.chkNotify);
+            this.grpNotify.Controls.Add(this.chkTrayIcon);
+            this.grpNotify.Location = new System.Drawing.Point(8, 806);
+            this.grpNotify.Name = "grpNotify";
+            this.grpNotify.Size = new System.Drawing.Size(269, 89);
+            this.grpNotify.TabIndex = 44;
+            this.grpNotify.TabStop = false;
+            this.grpNotify.Text = "通知与托盘";
+            // 
+            // chkNotify
+            // 
+            this.chkNotify.AutoSize = true;
+            this.chkNotify.Location = new System.Drawing.Point(6, 52);
+            this.chkNotify.Name = "chkNotify";
+            this.chkNotify.Size = new System.Drawing.Size(144, 21);
+            this.chkNotify.TabIndex = 1;
+            this.chkNotify.Text = "复制完成时弹通知";
+            this.chkNotify.UseVisualStyleBackColor = true;
+            // 
+            // chkTrayIcon
+            // 
+            this.chkTrayIcon.AutoSize = true;
+            this.chkTrayIcon.Location = new System.Drawing.Point(6, 22);
+            this.chkTrayIcon.Name = "chkTrayIcon";
+            this.chkTrayIcon.Size = new System.Drawing.Size(135, 21);
+            this.chkTrayIcon.TabIndex = 0;
+            this.chkTrayIcon.Text = "显示系统托盘图标";
+            this.chkTrayIcon.UseVisualStyleBackColor = true;
+            // 
+            // grpWhitelist
+            // 
+            this.grpWhitelist.Controls.Add(this.label24);
+            this.grpWhitelist.Controls.Add(this.txtWhitelist);
+            this.grpWhitelist.Controls.Add(this.chkWhitelist);
+            this.grpWhitelist.Location = new System.Drawing.Point(8, 900);
+            this.grpWhitelist.Name = "grpWhitelist";
+            this.grpWhitelist.Size = new System.Drawing.Size(269, 100);
+            this.grpWhitelist.TabIndex = 45;
+            this.grpWhitelist.TabStop = false;
+            this.grpWhitelist.Text = "U盘白名单";
+            // 
+            // label24
+            // 
+            this.label24.AutoSize = true;
+            this.label24.Location = new System.Drawing.Point(6, 78);
+            this.label24.Name = "label24";
+            this.label24.Size = new System.Drawing.Size(215, 17);
+            this.label24.TabIndex = 2;
+            this.label24.Text = "填入U盘卷序列号，多个用逗号分隔";
+            // 
+            // txtWhitelist
+            // 
+            this.txtWhitelist.Location = new System.Drawing.Point(6, 52);
+            this.txtWhitelist.Name = "txtWhitelist";
+            this.txtWhitelist.Size = new System.Drawing.Size(257, 23);
+            this.txtWhitelist.TabIndex = 1;
+            // 
+            // chkWhitelist
+            // 
+            this.chkWhitelist.AutoSize = true;
+            this.chkWhitelist.Location = new System.Drawing.Point(6, 22);
+            this.chkWhitelist.Name = "chkWhitelist";
+            this.chkWhitelist.Size = new System.Drawing.Size(147, 21);
+            this.chkWhitelist.TabIndex = 0;
+            this.chkWhitelist.Text = "仅复制白名单中的U盘";
+            this.chkWhitelist.UseVisualStyleBackColor = true;
             // 
             // groupBox8
             // 
@@ -1067,7 +1145,7 @@
             this.label10.Name = "label10";
             this.label10.Size = new System.Drawing.Size(307, 38);
             this.label10.TabIndex = 1;
-            this.label10.Text = "U盘文件复制器 V1.4.1";
+            this.label10.Text = "U盘文件复制器 V1.5.0";
             // 
             // label7
             // 
@@ -1171,7 +1249,7 @@
             this.Icon = ((System.Drawing.Icon)(resources.GetObject("$this.Icon")));
             this.MaximizeBox = false;
             this.Name = "Form1";
-            this.Text = "U盘文件复制器  V1.4.1";
+            this.Text = "U盘文件复制器  V1.5.0";
             this.groupBox1.ResumeLayout(false);
             this.groupBox1.PerformLayout();
             this.groupBox2.ResumeLayout(false);
@@ -1270,6 +1348,13 @@
         private System.Windows.Forms.CheckBox chkLogSuccess;
         private System.Windows.Forms.CheckBox chkLogWindow;
         private System.Windows.Forms.CheckBox chkLogToFile;
+        private System.Windows.Forms.GroupBox grpNotify;
+        private System.Windows.Forms.CheckBox chkTrayIcon;
+        private System.Windows.Forms.CheckBox chkNotify;
+        private System.Windows.Forms.GroupBox grpWhitelist;
+        private System.Windows.Forms.Label label24;
+        private System.Windows.Forms.TextBox txtWhitelist;
+        private System.Windows.Forms.CheckBox chkWhitelist;
         private System.Windows.Forms.Label label14;
         private System.Windows.Forms.CheckBox chkFolderFilter;
         private System.Windows.Forms.TextBox txtFolderKeywords;

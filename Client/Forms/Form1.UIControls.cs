@@ -330,6 +330,15 @@ namespace U盘文件复制
         }
 
         /// <summary>
+        /// U盘白名单控件
+        /// </summary>
+        private void SetupWhitelistControls()
+        {
+            chkWhitelist.CheckedChanged += (s, e) => txtWhitelist.Enabled = chkWhitelist.Checked;
+            txtWhitelist.Enabled = chkWhitelist.Checked;
+        }
+
+        /// <summary>
         /// 日志设置控件（同步到后端日志引擎）
         /// </summary>
         private void SetupLogSettingsControls()
@@ -423,6 +432,14 @@ namespace U盘文件复制
             chkFolderFilter.Checked = false;
             txtFolderKeywords.Enabled = false;
 
+            // 托盘与通知（默认开启）
+            chkTrayIcon.Checked = true;
+            chkNotify.Checked = true;
+
+            // 设备白名单（默认关闭）
+            chkWhitelist.Checked = false;
+            txtWhitelist.Enabled = false;
+
             // 服务器配置默认值
             if (txtServerPort != null) txtServerPort.Text = "443";
             if (chkUseHttps != null) chkUseHttps.Checked = true;
@@ -446,6 +463,7 @@ namespace U盘文件复制
                 await Task.Delay(500);
                 _usbMonitor.Dispose();
                 _keyboardHook.Dispose();
+                DisposeTrayIcon();
                 _cts?.Cancel();
                 _cts?.Dispose();
                 _copyLock?.Dispose();

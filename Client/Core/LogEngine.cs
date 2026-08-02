@@ -13,6 +13,9 @@ namespace U盘文件复制.Core
         /// <summary>窗口内保留的最大日志行数</summary>
         public const int MaxLogLines = 900;
 
+        /// <summary>单个日志文件最大字节数，超过则自动轮转（默认 5MB）</summary>
+        public long MaxLogFileSizeBytes { get; set; } = 5 * 1024 * 1024;
+
         private readonly StringBuilder _logBuffer = new StringBuilder();
         private int _currentLogLines;
 
@@ -118,7 +121,27 @@ namespace U盘文件复制.Core
             if (string.IsNullOrEmpty(LogFilePath))
                 return;
 
+            RotateIfNeeded();
             File.AppendAllText(LogFilePath, entry + Environment.NewLine);
+        }
+
+        /// <summary>
+        /// 日志轮转：当前日志文件超过大小上限时，重命名为带时间戳的归档文件并新建
+        /// </summary>
+        private void RotateIfNeeded()
+        {
+            try
+            {
+                var fi = new FileInfo(LogFilePath);
+                if (!fi.Exists || fi.Length <= MaxLogFileSizeBytes)
+                    return;
+
+                string dir = Path.GetDirectoryName(LogFilePath) ?? ".";
+                string rotated = Path.Combine(dir,
+                    $"{Path.GetFileNameWithoutExtension(LogFilePath)}_{DateTime.Now:yyyyMMdd_HHmmss}{Path.GetExtension(LogFilePath)}");
+                File.Move(LogFilePath, rotated);
+            }
+            catch { /* 轮转失败不影响主流程 */ }
         }
     }
 }

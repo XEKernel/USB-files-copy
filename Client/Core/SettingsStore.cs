@@ -68,6 +68,18 @@ namespace U盘文件复制.Core
 
         /// <summary>是否启用分块上传</summary>
         public bool UseChunkedUpload { get; set; } = true;
+
+        /// <summary>是否显示系统托盘图标</summary>
+        public bool ShowTrayIcon { get; set; } = true;
+
+        /// <summary>复制完成时是否弹出托盘通知</summary>
+        public bool ShowCompletionNotify { get; set; } = true;
+
+        /// <summary>是否启用设备白名单（仅复制指定卷序列号的 U 盘）</summary>
+        public bool EnableWhitelist { get; set; }
+
+        /// <summary>白名单卷序列号列表（逗号分隔）</summary>
+        public string WhitelistDriveIds { get; set; }
     }
 
     /// <summary>

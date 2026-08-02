@@ -1,6 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc;
 using System;
 using System.IO;
+using System.IO.Compression;
+using System.Linq;
 using System.Threading.Tasks;
 using U盘文件复制.Server.Services;
 
@@ -302,5 +304,120 @@ namespace U盘文件复制.Server.Controllers
                 return StatusCode(500, new { error = ex.Message });
             }
         }
+
+        /// <summary>
+        /// 批量下载：将多个文件打包为 ZIP
+        /// </summary>
+        [HttpPost("download-zip")]
+        public async Task<IActionResult> DownloadZip([FromBody] DownloadZipRequest request)
+        {
+            if (request?.Paths == null || request.Paths.Length == 0)
+                return BadRequest("paths 参数不能为空");
+
+            try
+            {
+                var ms = new MemoryStream();
+                using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, leaveOpen: true))
+                {
+                    foreach (var p in request.Paths.Distinct())
+                    {
+                        if (string.IsNullOrWhiteSpace(p)) continue;
+                        try
+                        {
+                            var (stream, _, _) = await _fileStore.OpenFileForReadAsync(p);
+                            var entry = zip.CreateEntry(p.TrimStart('/').Replace('\\', '/'));
+                            using (var entryStream = entry.Open())
+                            using (stream)
+                            {
+                                await stream.CopyToAsync(entryStream);
+                            }
+                        }
+                        catch (FileNotFoundException) { /* 单个文件丢失则跳过，不中断打包 */ }
+                    }
+                }
+                ms.Position = 0;
+                return File(ms, "application/zip", $"批量下载_{DateTime.Now:yyyyMMdd_HHmmss}.zip");
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// 列出回收站文件
+        /// </summary>
+        [HttpGet("trash")]
+        public async Task<IActionResult> ListTrash()
+        {
+            try
+            {
+                var items = await _fileStore.ListTrashAsync();
+                return Ok(new
+                {
+                    total = items.Count,
+                    items = items.Select(f => new
+                    {
+                        f.Path,
+                        f.Name,
+                        f.SizeBytes,
+                        LastWriteTimeUtc = f.LastWriteTimeUtc.ToString("yyyy-MM-dd HH:mm:ss")
+                    })
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// 从回收站恢复文件
+        /// </summary>
+        [HttpPost("restore")]
+        public async Task<IActionResult> RestoreFromTrash([FromQuery] string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return BadRequest("path 参数不能为空");
+
+            try
+            {
+                await _fileStore.RestoreFromTrashAsync(path);
+                return Ok(new { message = "文件已恢复", path });
+            }
+            catch (FileNotFoundException ex)
+            {
+                return NotFound(new { error = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// 清空回收站（可选 hoursOld：仅清理早于 N 小时的文件，默认全部）
+        /// </summary>
+        [HttpPost("trash-clear")]
+        public async Task<IActionResult> ClearTrash([FromQuery] int hoursOld = 0)
+        {
+            try
+            {
+                var cleared = await _fileStore.ClearTrashAsync(TimeSpan.FromHours(hoursOld));
+                return Ok(new { message = "回收站清理完成", clearedFiles = cleared });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { error = ex.Message });
+            }
+        }
+    }
+
+    /// <summary>
+    /// 批量下载请求体
+    /// </summary>
+    public class DownloadZipRequest
+    {
+        public string[] Paths { get; set; } = Array.Empty<string>();
     }
 }

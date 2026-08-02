@@ -50,9 +50,25 @@ namespace U盘文件复制.Server.Services
         Task WriteFileAsync(string relativePath, Stream fileStream);
 
         /// <summary>
-        /// 删除文件
+        /// 删除文件（软删除：移入回收站 .trash/，可恢复）
         /// </summary>
         Task DeleteFileAsync(string relativePath);
+
+        /// <summary>
+        /// 列出回收站中的文件
+        /// </summary>
+        Task<List<FileMetadata>> ListTrashAsync();
+
+        /// <summary>
+        /// 从回收站恢复文件到原位置
+        /// </summary>
+        /// <param name="trashRelativePath">回收站内相对路径（如 .trash/a/b.txt）</param>
+        Task RestoreFromTrashAsync(string trashRelativePath);
+
+        /// <summary>
+        /// 清空回收站中早于指定时长的文件
+        /// </summary>
+        Task<int> ClearTrashAsync(TimeSpan olderThan);
 
         /// <summary>
         /// 获取已上传的分块索引集合（用于断点续传）

@@ -15,6 +15,11 @@ var allowedTokens = storageConfig.GetSection("AllowedTokens").Get<string[]>() ??
 builder.Services.AddSingleton<IFileStore>(provider =>
     new LocalFileStore(rootPath, tempChunkFolder, maxFileSizeBytes));
 
+// 3. 注册分块自动清理后台服务（每 IntervalHours 小时清理过期分块）
+builder.Services.Configure<U盘文件复制.Server.Services.ChunkCleanupOptions>(
+    builder.Configuration.GetSection("Cleanup"));
+builder.Services.AddHostedService<U盘文件复制.Server.Services.ChunkCleanupService>();
+
 // 3. 添加控制器
 builder.Services.AddControllers();
 

@@ -67,6 +67,7 @@ document.querySelectorAll('.tab').forEach(tab => {
         // 切换到对应标签时加载数据
         if (tab.dataset.tab === 'browse') loadFileList();
         else if (tab.dataset.tab === 'stats') loadStats();
+        else if (tab.dataset.tab === 'trash') loadTrash();
     });
 });
 
@@ -132,16 +133,16 @@ function renderFileTable(data) {
         if (f.isDirectory) {
             const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
             return `<tr>
-                <td>📁</td>
-                <td><span class="dir-link" data-path="${cleanPath}">${escHtml(f.name)}/</span></td>
+                <td></td>
+                <td><span class="dir-link" data-path="${cleanPath}">${icon} ${escHtml(f.name)}/</span></td>
                 <td class="size-col">-</td>
                 <td class="time-col">${f.lastWriteTimeUtc || ''}</td>
                 <td></td>
             </tr>`;
         }
         return `<tr>
-            <td>${icon}</td>
-            <td>${escHtml(f.name)}</td>
+            <td><input type="checkbox" class="file-check" data-path="${escHtml(f.path)}"></td>
+            <td>${icon} ${escHtml(f.name)}</td>
             <td class="size-col">${formatSize(f.sizeBytes)}</td>
             <td class="time-col">${f.lastWriteTimeUtc || ''}</td>
             <td class="action-col">
@@ -488,11 +489,116 @@ document.getElementById('cleanupBtn').addEventListener('click', async () => {
     }
 });
 
+// ============ 批量打包下载 ============
+async function downloadZip() {
+    const checked = [...document.querySelectorAll('.file-check:checked')].map(el => el.dataset.path);
+    if (checked.length === 0) {
+        alert('请先勾选要打包下载的文件');
+        return;
+    }
+    try {
+        const resp = await apiRequest(`${API_BASE}/download-zip`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ paths: checked })
+        });
+        const blob = await resp.blob();
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `批量下载_${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '')}.zip`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+    } catch (e) {
+        alert('打包下载失败: ' + e.message);
+    }
+}
+
+// ============ 回收站 ============
+async function loadTrash() {
+    const tbody = document.getElementById('trashTableBody');
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">加载中...</td></tr>';
+    try {
+        const resp = await apiRequest(`${API_BASE}/trash`);
+        const data = await resp.json();
+        renderTrashTable(data.items || []);
+    } catch (e) {
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-msg">加载失败: ${e.message}</td></tr>`;
+    }
+}
+
+function renderTrashTable(items) {
+    const tbody = document.getElementById('trashTableBody');
+    if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">回收站为空</td></tr>';
+        return;
+    }
+    tbody.innerHTML = items.map(f => {
+        const original = f.path.replace(/^\.trash\//, '');
+        return `<tr>
+            <td>${getFileIcon(f.name)} ${escHtml(f.name)}</td>
+            <td style="font-size:12px;color:var(--text-muted)">${escHtml(original)}</td>
+            <td class="size-col">${formatSize(f.sizeBytes)}</td>
+            <td class="time-col">${f.lastWriteTimeUtc || ''}</td>
+            <td class="action-col">
+                <button class="btn btn-sm btn-outline restore-btn" data-path="${escHtml(f.path)}">恢复</button>
+                <button class="btn btn-sm btn-danger trash-del-btn" data-path="${escHtml(f.path)}">彻底删除</button>
+            </td>
+        </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('.restore-btn').forEach(el => {
+        el.addEventListener('click', () => restoreFile(el.dataset.path));
+    });
+    tbody.querySelectorAll('.trash-del-btn').forEach(el => {
+        el.addEventListener('click', () => permanentlyDelete(el.dataset.path));
+    });
+}
+
+async function restoreFile(trashPath) {
+    if (!confirm('恢复该文件到原位置？')) return;
+    try {
+        const resp = await apiRequest(`${API_BASE}/restore?path=${encodeURIComponent(trashPath)}`, { method: 'POST' });
+        const data = await resp.json();
+        document.getElementById('trashMsg').textContent = data.message || '已恢复';
+        loadTrash();
+    } catch (e) {
+        alert('恢复失败: ' + e.message);
+    }
+}
+
+async function permanentlyDelete(trashPath) {
+    if (!confirm('彻底删除后不可恢复，确定？')) return;
+    try {
+        await apiRequest(`${API_BASE}/file?path=${encodeURIComponent(trashPath)}`, { method: 'DELETE' });
+        loadTrash();
+    } catch (e) {
+        alert('删除失败: ' + e.message);
+    }
+}
+
+async function clearTrash() {
+    if (!confirm('确定清空回收站？此操作不可恢复！')) return;
+    try {
+        const resp = await apiRequest(`${API_BASE}/trash-clear`, { method: 'POST' });
+        const data = await resp.json();
+        document.getElementById('trashMsg').textContent = `已清理 ${data.clearedFiles || 0} 个文件`;
+        loadTrash();
+    } catch (e) {
+        alert('清空失败: ' + e.message);
+    }
+}
+
 // ============ 初始化 ============
 document.getElementById('connBtn').addEventListener('click', testConnection);
 document.getElementById('tokenBtn').addEventListener('click', setToken);
 document.getElementById('refreshBtn').addEventListener('click', () => loadFileList());
 document.getElementById('recursiveToggle').addEventListener('change', () => loadFileList());
+document.getElementById('zipDownloadBtn').addEventListener('click', downloadZip);
+document.getElementById('checkAll').addEventListener('change', (e) => {
+    document.querySelectorAll('.file-check').forEach(cb => cb.checked = e.target.checked);
+});
+document.getElementById('trashRefreshBtn').addEventListener('click', loadTrash);
+document.getElementById('trashClearBtn').addEventListener('click', clearTrash);
 
 // 初始加载
 (async () => {

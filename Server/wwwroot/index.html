@@ -26,6 +26,7 @@
             <button class="tab active" data-tab="browse">文件浏览</button>
             <button class="tab" data-tab="upload">上传文件</button>
             <button class="tab" data-tab="search">文件搜索</button>
+            <button class="tab" data-tab="trash">回收站</button>
             <button class="tab" data-tab="stats">存储统计</button>
         </nav>
 
@@ -36,6 +37,7 @@
                     <span class="crumb" data-path="">📁 根目录</span>
                 </div>
                 <div class="toolbar-actions">
+                    <button id="zipDownloadBtn" class="btn btn-sm" title="勾选文件后打包下载">打包下载</button>
                     <button id="refreshBtn" class="btn btn-sm">刷新</button>
                     <label class="toggle-label">
                         <input type="checkbox" id="recursiveToggle"> 递归
@@ -46,7 +48,7 @@
                 <table id="fileTable">
                     <thead>
                         <tr>
-                            <th style="width:40px"></th>
+                            <th style="width:36px"><input type="checkbox" id="checkAll" title="全选"></th>
                             <th>名称</th>
                             <th style="width:100px">大小</th>
                             <th style="width:160px">修改时间</th>
@@ -128,6 +130,33 @@
                 </table>
             </div>
             <div id="searchPager" class="pager"></div>
+        </section>
+
+        <!-- ===== 回收站 ===== -->
+        <section id="tab-trash" class="tab-content">
+            <div class="toolbar">
+                <div class="toolbar-actions">
+                    <button id="trashRefreshBtn" class="btn btn-sm">刷新</button>
+                    <button id="trashClearBtn" class="btn btn-sm btn-danger">清空回收站</button>
+                    <span id="trashMsg" class="progress-text"></span>
+                </div>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>文件名</th>
+                            <th>原始路径</th>
+                            <th style="width:100px">大小</th>
+                            <th style="width:160px">删除时间</th>
+                            <th style="width:140px">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trashTableBody">
+                        <tr><td colspan="5" class="empty-msg">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </section>
 
         <!-- ===== 统计 ===== -->
