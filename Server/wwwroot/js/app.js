@@ -6,7 +6,7 @@ const HEALTH_URL = window.location.origin + '/api/health';
 function getToken() {
     let token = localStorage.getItem('api_token');
     if (!token) {
-        token = prompt('请输入API令牌 (Bearer Token)', '1145141919810');
+        token = prompt('请输入API令牌 (Bearer Token)');
         if (token) localStorage.setItem('api_token', token);
         else throw new Error('缺少令牌');
     }

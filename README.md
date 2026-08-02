@@ -10,15 +10,27 @@ U盘文件自动备份工具，支持本地存储和远程服务器双模式，�
 
 ```
 ├── Client/                         # 客户端 (Windows Forms)
-│   ├── Form1.cs                    # 主窗体
-│   ├── Form1.*.cs                  # 部分类模块（复制/监控/设置/日志等）
-│   ├── Program.cs                  # 入口
-│   ├── IFileDestination.cs         # 存储目标接口
-│   ├── LocalFileDestination.cs     # 本地文件系统实现
-│   ├── HttpFileDestination.cs      # HTTP 服务器上传实现
-│   ├── NetworkHelper.cs            # HTTP 请求辅助类
-│   ├── RemoteBrowserForm.cs        # 远程目录浏览窗口
-│   ├── ServerConfig.cs             # 服务器配置
+│   ├── Forms/                      # 界面层：窗体、控件读写、事件绑定
+│   │   ├── Form1.cs                # 主窗体（事件编排，调用后端类）
+│   │   ├── Form1.Designer.cs       # 控件声明与布局（设计器文件）
+│   │   ├── Form1.*.cs              # 界面部分类（设置绑定/扩展名选择/控件事件）
+│   │   ├── RemoteBrowserForm.cs    # 远程目录浏览窗口
+│   │   └── Program.cs              # 入口
+│   ├── Core/                       # 后端层：纯功能代码（零 UI 依赖）
+│   │   ├── CopyEngine.cs           # 复制引擎（递归复制/限速/目录树/过滤）
+│   │   ├── CopyOptions.cs          # 复制任务配置模型
+│   │   ├── UsbMonitor.cs           # USB 插入监听（WMI）
+│   │   ├── LogEngine.cs            # 日志引擎（过滤/写文件，事件通知界面）
+│   │   ├── SettingsStore.cs        # 设置持久化（XML + DPAPI 加密）
+│   │   ├── FileCategories.cs       # 扩展名分类/系统目录/枚举
+│   │   ├── KeyboardHook.cs         # 全局键盘钩子（U+S+B / ESC×5）
+│   │   ├── AutoStartManager.cs     # 开机自启动（注册表）
+│   ├── Storage/                    # 存储目标层
+│   │   ├── IFileDestination.cs     # 存储目标接口
+│   │   ├── LocalFileDestination.cs # 本地文件系统实现
+│   │   ├── HttpFileDestination.cs  # HTTP 服务器上传实现
+│   │   ├── NetworkHelper.cs        # HTTP 请求辅助类
+│   │   └── ServerConfig.cs         # 服务器配置
 │   └── U盘文件复制.csproj          # 客户端项目文件
 │
 ├── Server/                         # 服务端 (ASP.NET Core Web API)
@@ -27,7 +39,7 @@ U盘文件自动备份工具，支持本地存储和远程服务器双模式，�
 │   │   ├── FileController.cs       # 文件操作 API
 │   │   └── HealthController.cs     # 健康检查
 │   ├── Middleware/                  # 中间件
-│   │   ├── ApiKeyAuthMiddleware.cs # Bearer Token 认证
+│   │   ├── ApiKeyAuthMiddleware.cs # Bearer Token / Basic 认证
 │   │   └── RequestLoggingMiddleware.cs
 │   ├── Services/                    # 服务层
 │   │   ├── IFileStore.cs           # 文件存储接口
@@ -102,15 +114,21 @@ dotnet run
 ```json
 {
   "FileStorage": {
-    "RootPath": "uploads",
-    "AllowedTokens": ["1145141919810"],
-    "MaxFileSizeMB": 2048
+    "RootPath": "Storage",
+    "TempChunkFolder": "_chunks",
+    "MaxFileSizeBytes": 1073741824,
+    "AllowedTokens": ["请替换为随机生成的 API 令牌"],
+    "BasicPasswords": ["请替换为基本认证密码（可选，与令牌二选一）"]
   },
   "Cors": {
     "AllowedOrigins": ["*"]
   }
 }
 ```
+
+> **安全提醒**：`AllowedTokens` 中的令牌即客户端/Web 面板的访问凭证，
+> 部署前请务必替换为随机值（可用 `openssl rand -hex 24` 生成），
+> 不要使用仓库中示例或历史提交中的默认值。
 
 ### 客户端
 
@@ -133,9 +151,22 @@ dotnet run
 | 层级 | 技术 |
 |------|------|
 | 客户端 | .NET Framework 4.7.2 / Windows Forms / Newtonsoft.Json |
-| 服务端 | .NET 8 / ASP.NET Core / Swagger / Bearer Token 认证 |
+| 服务端 | .NET 8 / ASP.NET Core / Swagger / Bearer Token + Basic 双认证 |
 | Web 前端 | 原生 HTML/CSS/JS（无框架依赖） |
 | 存储 | 本地文件系统（客户端 + 服务端） |
+
+## 更新历史
+
+### v1.4.1（2026-08-02）
+- 修复：服务器配置页"测试连接"按钮与"浏览远程"/连接状态标签重叠
+- 架构：界面层（Forms/）与后端层（Core/）彻底分离，业务代码零 UI 依赖
+- 安全：移除默认弱令牌，前端强制手动输入令牌
+- 修复：本地模式远程浏览下载路径错误、Basic 认证不可用、分块开关保存失效等 6 个问题
+
+### v1.4.0（2026-08-02）
+- 控件语义化重命名（textBox1~27 → txt/chk/rdo/btn 可读命名）
+- 客户端按 Forms/ Storage/ 分层重组
+- 清理死代码、AI 占位注释、误标 auto-generated 等屎山
 
 ## 许可证
 
@@ -143,5 +174,5 @@ MIT License
 
 ---
 
-*最后更新：2026年6月*
-*版本：V1.2.2*
+*最后更新：2026年8月*
+*版本：V1.4.1*

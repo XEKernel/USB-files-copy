@@ -29,6 +29,9 @@ namespace U盘文件复制
 
         public string DestinationType => "本地存储";
 
+        /// <summary>本地存储根目录（绝对路径），供 RemoteBrowserForm 等外部组件使用</summary>
+        public string RootDirectory => _rootDirectory;
+
         public IProgress<(string filePath, long bytesTransferred, long totalBytes)> Progress { get; set; }
 
         private string GetFullPath(string relativePath)

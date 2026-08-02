@@ -270,9 +270,11 @@ namespace U盘文件复制
                     }
                     else
                     {
-                        // 本地复制
+                        // 本地复制：目标文件位于 LocalFileDestination 的根目录下
                         var localDest = _destination as LocalFileDestination;
-                        var fullPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Desktop), "U盘文件备份", tag.Path);
+                        if (localDest == null)
+                            throw new InvalidOperationException("未知的存储目标类型");
+                        var fullPath = Path.Combine(localDest.RootDirectory, tag.Path);
                         if (File.Exists(fullPath))
                             File.Copy(fullPath, sfd.FileName, true);
                         else

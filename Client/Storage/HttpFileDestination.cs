@@ -2,16 +2,14 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Net;
-using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json.Linq;
 
 namespace U盘文件复制
 {
     /// <summary>
     /// 服务器上传实现（基于 HTTPS）
+    /// 所有 HTTP 细节统一委托给 NetworkHelper，避免重复的客户端工厂与认证逻辑
     /// </summary>
     public class HttpFileDestination : IFileDestination
     {
@@ -106,29 +104,7 @@ namespace U盘文件复制
             relativePath = (relativePath ?? "").Replace('\\', '/').TrimStart('/');
             try
             {
-                using (var client = CreateClient(_config))
-                {
-                    var url = $"{_config.ApiBaseUrl}/list?path={Uri.EscapeDataString(relativePath)}&recursive={(recursive ? "true" : "false")}&pageSize=10000";
-                    var response = await client.GetAsync(url, cancellationToken);
-                    response.EnsureSuccessStatusCode();
-                    var json = await response.Content.ReadAsStringAsync();
-
-                    var doc = JObject.Parse(json);
-                    var result = new List<FileMetadataInfo>();
-                    var items = (JArray)doc["items"];
-                    foreach (var item in items)
-                    {
-                        result.Add(new FileMetadataInfo
-                        {
-                            Path = (string)item["path"] ?? "",
-                            Name = (string)item["name"] ?? "",
-                            SizeBytes = (long)item["sizeBytes"],
-                            LastWriteTimeUtc = DateTime.Parse((string)item["lastWriteTimeUtc"] ?? DateTime.MinValue.ToString()),
-                            IsDirectory = (bool)item["isDirectory"]
-                        });
-                    }
-                    return result;
-                }
+                return await NetworkHelper.ListFilesAsync(_config, relativePath, recursive, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -140,25 +116,7 @@ namespace U盘文件复制
         {
             try
             {
-                using (var client = CreateClient(_config))
-                {
-                    var url = $"{_config.ApiBaseUrl}/stats";
-                    var response = await client.GetAsync(url, cancellationToken);
-                    response.EnsureSuccessStatusCode();
-                    var json = await response.Content.ReadAsStringAsync();
-
-                    var doc = JObject.Parse(json);
-                    return new StorageStatsInfo
-                    {
-                        TotalFiles = (long)doc["totalFiles"],
-                        TotalSizeBytes = (long)doc["totalSizeBytes"],
-                        AvailableDiskBytes = doc["availableDiskMB"] != null
-                            ? (long)((double)doc["availableDiskMB"] * 1024 * 1024) : 0,
-                        TotalDiskBytes = doc["totalDiskMB"] != null
-                            ? (long)((double)doc["totalDiskMB"] * 1024 * 1024) : 0,
-                        PendingChunks = doc["pendingChunks"] != null ? (int)doc["pendingChunks"] : 0
-                    };
-                }
+                return await NetworkHelper.GetStatsAsync(_config, cancellationToken);
             }
             catch (Exception ex)
             {
@@ -174,40 +132,6 @@ namespace U盘文件复制
         {
             return await NetworkHelper.SearchFilesAsync(_config, keyword, extension,
                 startDate, endDate, recursive, page, pageSize, cancellationToken);
-        }
-
-        /// <summary>
-        /// 创建 HTTP 客户端（专用于元数据查询，复用共享 Handler）
-        /// </summary>
-        private static HttpClient CreateClient(ServerConfig config)
-        {
-            var handler = new HttpClientHandler
-            {
-                AllowAutoRedirect = true,
-                UseProxy = true,
-            };
-            // 证书验证策略
-            if (config.ValidateCertificate)
-                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => sslPolicyErrors == System.Net.Security.SslPolicyErrors.None;
-            else
-                handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) => true;
-
-            var client = new HttpClient(handler, disposeHandler: true)
-            {
-                Timeout = TimeSpan.FromSeconds(config.TimeoutSeconds)
-            };
-
-            if (!string.IsNullOrWhiteSpace(config.ApiToken))
-            {
-                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", config.ApiToken);
-            }
-            else if (!string.IsNullOrWhiteSpace(config.Password))
-            {
-                var byteArray = System.Text.Encoding.ASCII.GetBytes($"usercopy:{config.Password}");
-                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", Convert.ToBase64String(byteArray));
-            }
-
-            return client;
         }
     }
 }

@@ -1,5 +1,4 @@
-﻿// 在Program.cs中添加以下代码（需确保存在该文件）
-using System;
+﻿using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;

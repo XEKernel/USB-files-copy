@@ -38,9 +38,9 @@ namespace U盘文件复制.Server.Controllers
 
         /// <summary>
         /// 上传完整文件（PUT 方式）
+        /// 大小限制由 Kestrel 全局 MaxRequestBodySize（appsettings 的 MaxFileSizeBytes）控制
         /// </summary>
         [HttpPut("file")]
-        [RequestSizeLimit(1_073_741_824)] // 1GB，可调整
         public async Task<IActionResult> UploadFile([FromQuery] string path)
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -87,7 +87,6 @@ namespace U盘文件复制.Server.Controllers
         /// 上传分块
         /// </summary>
         [HttpPut("chunk")]
-        [RequestSizeLimit(100_000_000)] // 单个分块最大 100MB
         public async Task<IActionResult> UploadChunk([FromQuery] string path, [FromQuery] int index, [FromQuery] int total)
         {
             if (string.IsNullOrWhiteSpace(path))
@@ -185,45 +184,16 @@ namespace U盘文件复制.Server.Controllers
 
             try
             {
-                var (fileStream, fileSize, lastModifiedUtc) = await _fileStore.OpenFileForReadAsync(path);
+                var (fileStream, _, lastModifiedUtc) = await _fileStore.OpenFileForReadAsync(path);
 
                 // 设置响应头
-                Response.Headers.Append("Content-Length", fileSize.ToString());
                 Response.Headers.Append("Last-Modified", lastModifiedUtc.ToString("r"));
-                Response.Headers.Append("Accept-Ranges", "bytes");
 
                 var fileName = Path.GetFileName(path);
                 var contentType = "application/octet-stream";
 
-                // 处理 Range 请求（断点续传下载）
-                if (Request.Headers.ContainsKey("Range"))
-                {
-                    var rangeHeader = Request.Headers["Range"].ToString();
-                    if (rangeHeader.StartsWith("bytes="))
-                    {
-                        var range = rangeHeader.Substring("bytes=".Length);
-                        var parts = range.Split('-');
-                        long start = long.Parse(parts[0]);
-                        long end = parts.Length > 1 && !string.IsNullOrEmpty(parts[1])
-                            ? long.Parse(parts[1])
-                            : fileSize - 1;
-
-                        if (start >= fileSize || end >= fileSize)
-                        {
-                            return StatusCode(416, new { error = "请求范围不满足" });
-                        }
-
-                        var length = end - start + 1;
-                        fileStream.Seek(start, SeekOrigin.Begin);
-
-                        Response.StatusCode = 206;
-                        Response.Headers.Append("Content-Range", $"bytes {start}-{end}/{fileSize}");
-                        Response.Headers.Append("Content-Length", length.ToString());
-
-                        return File(fileStream, contentType, enableRangeProcessing: true);
-                    }
-                }
-
+                // File() 重载默认 enableRangeProcessing: true，自动处理 Range 断点续传，
+                // 无需手动解析 Range 头（避免双重处理冲突）
                 return File(fileStream, contentType, fileName);
             }
             catch (FileNotFoundException ex)
