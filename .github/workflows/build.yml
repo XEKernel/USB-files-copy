@@ -32,18 +32,26 @@ jobs:
         $proj = Get-ChildItem Client/*.csproj | Select-Object -First 1
         .\nuget.exe restore $proj.FullName -PackagesDirectory Client/packages -NonInteractive
 
-    - name: 编译客户端 (Release)
+    - name: 编译客户端 (Release, 完整版)
       shell: cmd
       run: msbuild Client/U盘文件复制.csproj /t:Build /p:Configuration=Release /p:Platform=AnyCPU
+
+    - name: 编译客户端 (Release, 单机版)
+      shell: cmd
+      run: msbuild Client/U盘文件复制.csproj /t:Build /p:Configuration=Release /p:Platform=AnyCPU /p:LocalOnly=true
 
     - name: 收集客户端产物
       shell: cmd
       run: |
         mkdir publish\Client
         xcopy Client\bin\Release\* publish\Client\ /E /Y
+        mkdir publish\Client-Local
+        xcopy Client\bin\Release-Local\* publish\Client-Local\ /E /Y
         # 删除不必要的文件
         if exist publish\Client\*.pdb del /Q publish\Client\*.pdb
         if exist publish\Client\*.xml del /Q publish\Client\*.xml
+        if exist publish\Client-Local\*.pdb del /Q publish\Client-Local\*.pdb
+        if exist publish\Client-Local\*.xml del /Q publish\Client-Local\*.xml
 
     # ==================== .NET 8 服务端 (多平台) ====================
     - name: 安装 .NET 8 SDK
@@ -80,7 +88,7 @@ jobs:
     - name: 打包为 ZIP
       run: |
         cd publish
-        7z a -tzip "../USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip" Client Server
+        7z a -tzip "../USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip" Client Client-Local Server
 
     # ==================== 上传产物 ====================
     - name: 上传 ZIP 到 Artifact
@@ -104,7 +112,8 @@ jobs:
           ### 压缩包内容
           ```
           USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip
-          ├── Client/          # Windows 客户端程序
+          ├── Client/          # Windows 客户端（完整版，支持连接服务器）
+          ├── Client-Local/    # Windows 客户端（单机版，不支持服务器连接）
           └── Server/          # ASP.NET Core 服务端
               ├── win-x64/     # Windows x64
               ├── linux-x64/   # Linux x64
@@ -113,7 +122,13 @@ jobs:
 
           ### 部署说明
 
-          **客户端**: 解压 `Client/` 文件夹，运行 `U盘文件复制器.exe`
+          **客户端（两个版本按需选择）**：
+
+          - `Client/` — **完整版**：可保存到本地目录，也可上传到服务端（需配置服务器地址与令牌）
+          - `Client-Local/` — **单机版**：仅保存到本地/移动硬盘，界面中没有服务器配置，
+            编译期即不含上传相关代码，适合只需本地备份、或不允许程序外联的场景
+
+          解压对应文件夹，运行其中的 exe 即可（无需安装）。
 
           **服务端**: 选择对应平台目录，先安装 [.NET 8 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)，然后运行：
           ```bash

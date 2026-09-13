@@ -25,7 +25,7 @@
     <UpdateRequired>false</UpdateRequired>
     <MapFileExtensions>true</MapFileExtensions>
     <ApplicationRevision>1</ApplicationRevision>
-    <ApplicationVersion>1.6.0.0</ApplicationVersion>
+    <ApplicationVersion>1.7.0.0</ApplicationVersion>
     <UseApplicationTrust>false</UseApplicationTrust>
     <PublishWizardCompleted>true</PublishWizardCompleted>
     <BootstrapperEnabled>true</BootstrapperEnabled>
@@ -52,6 +52,20 @@
   </PropertyGroup>
   <PropertyGroup>
     <ApplicationIcon>icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <!-- ===================================================================
+       单机版（不支持服务器连接）：msbuild /p:LocalOnly=true
+       定义 LOCAL_ONLY 常量、使用独立的输出与中间目录、程序名加「-单机版」后缀，
+       并在下方条件排除联网上传相关源文件（NetworkHelper / HttpFileDestination / RemoteBrowserForm）。
+       注意：该 PropertyGroup 必须位于上面的 Debug/Release 分组之后才能覆盖 OutputPath。
+       =================================================================== -->
+  <PropertyGroup Condition="'$(LocalOnly)' == 'true'">
+    <DefineConstants>$(DefineConstants);LOCAL_ONLY</DefineConstants>
+    <AssemblyName>U盘文件复制器-单机版</AssemblyName>
+    <OutputPath>bin\Release-Local\</OutputPath>
+    <IntermediateOutputPath>obj\Release-Local\</IntermediateOutputPath>
+    <ApplicationTitle>U盘文件复制器（单机版）</ApplicationTitle>
   </PropertyGroup>
   <PropertyGroup>
     <SignAssembly>false</SignAssembly>
@@ -113,7 +127,8 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-        <Compile Include="Forms\RemoteBrowserForm.cs">
+    <!-- 服务器连接相关文件：单机版（/p:LocalOnly=true）不参与编译 -->
+    <Compile Include="Forms\RemoteBrowserForm.cs" Condition="'$(LocalOnly)' != 'true'">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="Forms\Form1.cs">
@@ -135,10 +150,11 @@
       <DependentUpon>Form1.cs</DependentUpon>
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="Storage\HttpFileDestination.cs" />
     <Compile Include="Storage\IFileDestination.cs" />
     <Compile Include="Storage\LocalFileDestination.cs" />
-    <Compile Include="Storage\NetworkHelper.cs" />
+    <!-- 服务器连接相关文件：单机版不参与编译 -->
+    <Compile Include="Storage\NetworkHelper.cs" Condition="'$(LocalOnly)' != 'true'" />
+    <Compile Include="Storage\HttpFileDestination.cs" Condition="'$(LocalOnly)' != 'true'" />
     <Compile Include="Forms\Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Storage\ServerConfig.cs" />

@@ -21,12 +21,24 @@ namespace U盘文件复制
             };
             txtCustomExtensions.Enabled = !chkAllFiles.Checked;
 
+#if LOCAL_ONLY
+            // ===== 单机版：不提供服务器连接能力 =====
+            // 直接移除「服务器配置」整页（含保存位置单选、服务器参数、分块设置），
+            // 并把运行模式锁定为本地存储。
+            if (tabControl1.TabPages.Contains(tabPage3))
+                tabControl1.TabPages.Remove(tabPage3);
+
+            rdoLocalSave.Checked = true;
+            _currentDestination = new LocalFileDestination(GetDefaultLocalPath());
+#else
             // 服务器配置界面事件
             SetupServerConfigControls();
+#endif
         }
 
+#if !LOCAL_ONLY
         /// <summary>
-        /// 设置服务器配置相关控件
+        /// 设置服务器配置相关控件（仅完整版）
         /// </summary>
         private void SetupServerConfigControls()
         {
@@ -52,6 +64,12 @@ namespace U盘文件复制
             grpServerConfig.Enabled = rdoServerSave.Checked;
             btnTestConn.Enabled = rdoServerSave.Checked;
             _btnBrowseRemote.Enabled = rdoServerSave.Checked;
+
+            // 首次运行两个单选框都未选中：默认选中「本地」。
+            // 否则 BuildAppSettings 会把 SaveLocation 记成 1（服务器），
+            // 下次启动界面就变成服务器模式，与首次运行的实际行为（本地）不一致。
+            if (!rdoLocalSave.Checked && !rdoServerSave.Checked)
+                rdoLocalSave.Checked = true;
 
             // 测试连接按钮
             btnTestConn.Click += async (s, e) => await TestServerConnection();
@@ -134,11 +152,20 @@ namespace U盘文件复制
             };
         }
 
+#endif
+
         /// <summary>
         /// 根据当前 UI 选择创建对应的文件存储目标
         /// </summary>
         private IFileDestination CreateFileDestination()
         {
+#if LOCAL_ONLY
+            // 单机版：始终使用本地存储
+            string localOnlyPath = string.IsNullOrWhiteSpace(txtTargetDir.Text)
+                ? GetDefaultLocalPath()
+                : txtTargetDir.Text;
+            return new LocalFileDestination(localOnlyPath);
+#else
             if (rdoServerSave.Checked) // 服务器
             {
                 var config = BuildServerConfigFromUi();
@@ -158,6 +185,7 @@ namespace U盘文件复制
                     : txtTargetDir.Text;
                 return new LocalFileDestination(localPath);
             }
+#endif
         }
 
         private string GetDefaultLocalPath()
@@ -517,8 +545,9 @@ namespace U盘文件复制
         }
 
         /// <summary>
-        /// 浏览远程服务器目录
+        /// 浏览远程服务器目录（仅完整版）
         /// </summary>
+#if !LOCAL_ONLY
         private async Task BrowseRemoteDirectory()
         {
             if (!rdoServerSave.Checked)
@@ -564,5 +593,6 @@ namespace U盘文件复制
                 lblConnStatus.Text = $"错误: {ex.Message}";
             }
         }
+#endif
     }
 }

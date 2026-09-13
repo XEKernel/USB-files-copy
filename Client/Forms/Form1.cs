@@ -71,6 +71,17 @@ namespace U盘文件复制
             SetDefaultValues();
             LoadSettings();
 
+            // 标题由程序集版本生成（Designer 里硬编码的版本号容易与实际版本不一致）
+            var assemblyVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            this.Text = $"U盘文件复制器 v{assemblyVersion?.ToString(3) ?? "0.0.0"}";
+
+#if LOCAL_ONLY
+            this.Text += "（单机版）";
+            _logEngine.Write("版本：单机版（不支持服务器连接）", false);
+#else
+            _logEngine.Write("版本：完整版（支持服务器连接）", false);
+#endif
+
             _logEngine.Write($"配置文件位置：{SettingsStore.FilePath}", false);
 
             // 根据用户选择的保存位置创建对应的文件存储目标（本地或服务器）

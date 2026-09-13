@@ -28,10 +28,10 @@ U盘文件自动备份工具，支持本地存储和远程服务器双模式，�
 │   ├── Storage/                    # 存储目标层
 │   │   ├── IFileDestination.cs     # 存储目标接口
 │   │   ├── LocalFileDestination.cs # 本地文件系统实现
-│   │   ├── HttpFileDestination.cs  # HTTP 服务器上传实现
-│   │   ├── NetworkHelper.cs        # HTTP 请求辅助类
+│   │   ├── HttpFileDestination.cs  # HTTP 服务器上传实现（单机版不编译）
+│   │   ├── NetworkHelper.cs        # HTTP 请求辅助类（单机版不编译）
 │   │   └── ServerConfig.cs         # 服务器配置
-│   └── U盘文件复制.csproj          # 客户端项目文件
+│   └── U盘文件复制.csproj          # 客户端项目文件（/p:LocalOnly=true 出单机版）
 │
 ├── Server/                         # 服务端 (ASP.NET Core Web API)
 │   ├── Program.cs                  # 入口 + 中间件管道
@@ -48,7 +48,8 @@ U盘文件自动备份工具，支持本地存储和远程服务器双模式，�
 │   │   ├── index.html
 │   │   ├── css/style.css
 │   │   └── js/app.js
-│   └── appsettings.json            # 配置文件（令牌、存储路径）
+│   ├── appsettings.json            # 本地配置（含令牌，已被 .gitignore 排除）
+│   └── appsettings.Example.json    # 配置模板（提交到仓库，含占位值）
 │
 ├── U盘文件复制.sln                 # 解决方案文件
 └── README.md
@@ -108,6 +109,27 @@ U盘文件自动备份工具，支持本地存储和远程服务器双模式，�
 - **维护工具**：清理过期分块
 - **令牌管理**：localStorage 持久化
 
+## 客户端版本
+
+客户端提供两个版本，按使用场景选择：
+
+| | 完整版 | 单机版 |
+|---|---|---|
+| 程序名 | `U盘文件复制器.exe` | `U盘文件复制器-单机版.exe` |
+| 保存到本地/移动硬盘 | ✅ | ✅ |
+| 上传到服务端（服务器模式） | ✅ | ❌ 不提供 |
+| 「服务器配置」设置页 | 有 | **整页移除** |
+| 远程目录浏览 / 分块上传 | 有 | 不提供 |
+| 上传相关代码 | 有 | **编译期不包含**（程序内不存在 HTTP 上传实现） |
+| 检查更新（访问 GitHub） | 有 | 有 |
+| 设置文件 | 通用 | 通用（自动忽略服务器字段） |
+
+**怎么选**：只需要把 U 盘文件备份到本地或移动硬盘 → 用**单机版**，界面里没有任何服务器选项，不会被误配置；
+需要统一收集到服务器 → 用**完整版**。单机版由于编译期就剔除了上传代码，也适合有内网管控、
+不允许程序外联上传的教学/办公环境（仍会访问 GitHub 检查更新）。
+
+两个版本的 `settings.xml` 互相兼容：完整版换用单机版后，服务器相关配置会被忽略并清空，不会报错。
+
 ## 快速开始
 
 ### 服务端
@@ -152,19 +174,36 @@ dotnet run
 
 ### 客户端
 
+**方式一：直接使用发布包**（推荐）
+
+从 [Releases](https://github.com/XEKernel/USB-files-copy/releases) 下载 ZIP，解压后按需要选择
+`Client/`（完整版）或 `Client-Local/`（单机版），运行其中的 exe，无需安装。
+
+**方式二：从源码构建**
+
 1. 用 Visual Studio 打开 `U盘文件复制.sln`
 2. 生成 `Client/U盘文件复制.csproj`（.NET Framework 4.7.2）
-3. 运行 `Client/bin/Debug/U盘文件复制器.exe`
+   - 完整版：直接生成（输出 `Client/bin/Release/U盘文件复制器.exe`）
+   - 单机版：命令行加 `LocalOnly` 属性（输出 `Client/bin/Release-Local/U盘文件复制器-单机版.exe`）
+     ```bash
+     msbuild Client/U盘文件复制.csproj /t:Build /p:Configuration=Release /p:Platform=AnyCPU /p:LocalOnly=true
+     ```
+3. 运行 `Client/bin/Debug/U盘文件复制器.exe`（调试）
 
-#### 连接到远程服务器
+> `LocalOnly=true` 会定义 `LOCAL_ONLY` 编译常量、切换输出目录与程序名，
+> 并排除 `NetworkHelper.cs` / `HttpFileDestination.cs` / `RemoteBrowserForm.cs` 三个文件的编译，
+> 因此单机版程序中不存在上传实现（可用 `strings` 检索 `HttpFileDestination` 验证为空）。
 
-在界面右侧切换到「服务器」模式，填写：
+#### 连接到远程服务器（仅完整版）
+
+在「服务器配置」页切换到「服务器」模式，填写：
 - 服务器地址：`localhost`（本机）或服务器 IP
 - 端口：`5000`
 - API 令牌：与服务器 `AllowedTokens` 一致
 - 取消勾选 HTTPS（服务端默认仅监听 HTTP）
 
 点击「测试连接」验证，通过后即可使用。
+（单机版没有该设置页，也没有服务器模式。）
 
 #### 配置文件位置（设置无法保存时请看这里）
 
@@ -198,6 +237,19 @@ dotnet run
 | 存储 | 本地文件系统（客户端 + 服务端） |
 
 ## 更新历史
+
+### v1.7.0（2026-09-13）
+**新增：两个客户端版本**
+- 完整版 `U盘文件复制器.exe`（支持连接服务器）与单机版 `U盘文件复制器-单机版.exe`（不支持服务器连接）
+- 单机版通过 `msbuild /p:LocalOnly=true` 编译：定义 `LOCAL_ONLY` 常量、输出到 `bin/Release-Local/`、
+  程序名加后缀，并排除 `NetworkHelper.cs` / `HttpFileDestination.cs` / `RemoteBrowserForm.cs`，
+  界面中「服务器配置」整页移除、锁定本地存储（详见「客户端版本」章节）
+- 发布包内同时提供 `Client/` 与 `Client-Local/` 两个文件夹，设置文件互相兼容
+
+**客户端修复**
+- 修复首次运行时「文件保存位置」两个单选框都未选中、配置被记成"服务器"，
+  导致第二次启动界面变成服务器模式（实际仍回退本地）的不一致；现默认选中「本地」
+- 窗口标题改为读取程序集版本（原先 Designer 里硬编码 `V1.5.0` 不会随版本更新）
 
 ### v1.6.0（2026-09-13）
 **安全修复（服务端）**

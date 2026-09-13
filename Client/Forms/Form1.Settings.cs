@@ -77,7 +77,7 @@ namespace U盘文件复制
         /// </summary>
         private AppSettings BuildAppSettings()
         {
-            return new AppSettings
+            var settings = new AppSettings
             {
                 TargetDirectory = txtTargetDir.Text,
 
@@ -160,6 +160,15 @@ namespace U盘文件复制
                     MaxRetries = 3
                 }
             };
+
+#if LOCAL_ONLY
+            // 单机版：不涉及服务器，固定本地存储并清空服务器字段
+            settings.SaveLocation = 0;
+            settings.UseChunkedUpload = false;
+            settings.Server = new ServerConfig();
+#endif
+
+            return settings;
         }
 
         /// <summary>
@@ -242,6 +251,10 @@ namespace U盘文件复制
                 chkAutoStart.Checked = settings.AutoStart;
                 chkAutoStartHidden.Checked = settings.AutoStartHidden;
 
+#if LOCAL_ONLY
+                // 单机版：无服务器相关控件，固定本地存储
+                rdoLocalSave.Checked = true;
+#else
                 // 服务器相关
                 if (settings.Server != null)
                 {
@@ -262,6 +275,7 @@ namespace U盘文件复制
                 // 分块上传开关
                 if (chkChunkedUpload != null)
                     chkChunkedUpload.Checked = settings.UseChunkedUpload;
+#endif
 
                 // 托盘与通知开关
                 chkTrayIcon.Checked = settings.ShowTrayIcon;
