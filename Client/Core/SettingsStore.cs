@@ -84,36 +84,142 @@ namespace U盘文件复制.Core
 
     /// <summary>
     /// 设置持久化（XML 序列化 + DPAPI 加密敏感字段）
+    /// 路径策略：程序目录可写时用程序目录（绿色版/便携），否则回退到 %APPDATA%\U盘文件复制器
+    /// （安装到 Program Files、希沃教学机等受保护目录时，程序目录不可写会导致设置无法保存）
     /// </summary>
     public static class SettingsStore
     {
         private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("U盘文件复制器_SALT_2024");
 
-        /// <summary>设置文件路径（程序目录下 settings.xml）</summary>
-        public static string FilePath => Path.Combine(Application.StartupPath, "settings.xml");
+        private static readonly object FileLock = new object();
+        private static string _filePath;
+        private static bool _pathResolved;
 
+        /// <summary>设置文件完整路径（首次访问时解析并缓存）</summary>
+        public static string FilePath
+        {
+            get
+            {
+                if (!_pathResolved)
+                {
+                    _filePath = ResolveFilePath();
+                    _pathResolved = true;
+                }
+                return _filePath;
+            }
+        }
+
+        /// <summary>当前使用的设置目录（用于界面提示 / 日志）</summary>
+        public static string DirectoryPath
+        {
+            get
+            {
+                var dir = System.IO.Path.GetDirectoryName(FilePath);
+                return string.IsNullOrEmpty(dir) ? Application.StartupPath : dir;
+            }
+        }
+
+        /// <summary>
+        /// 解析设置文件位置：
+        /// 1) 已存在的程序目录配置优先（兼容既有便携部署，避免升级后设置「丢失」）
+        /// 2) 已存在的 %APPDATA% 配置次之
+        /// 3) 都没有时：程序目录可写则用程序目录，否则用 %APPDATA%
+        /// </summary>
+        private static string ResolveFilePath()
+        {
+            string portable = System.IO.Path.Combine(Application.StartupPath, "settings.xml");
+            string roaming = System.IO.Path.Combine(GetRoamingDirectory(), "settings.xml");
+
+            try
+            {
+                if (File.Exists(portable)) return portable;
+                if (File.Exists(roaming)) return roaming;
+                return IsDirectoryWritable(Application.StartupPath) ? portable : roaming;
+            }
+            catch
+            {
+                return roaming;
+            }
+        }
+
+        private static string GetRoamingDirectory()
+        {
+            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            if (string.IsNullOrEmpty(appData))
+                appData = System.IO.Path.GetTempPath();
+            return System.IO.Path.Combine(appData, "U盘文件复制器");
+        }
+
+        /// <summary>探测目录是否可写（不留下残留文件）</summary>
+        public static bool IsDirectoryWritable(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory)) return false;
+            string probe = System.IO.Path.Combine(directory, ".write_probe_" + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                using (var fs = new FileStream(probe, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.DeleteOnClose))
+                {
+                    fs.WriteByte(0);
+                }
+                return true;
+            }
+            catch
+            {
+                try { if (File.Exists(probe)) File.Delete(probe); } catch { }
+                return false;
+            }
+        }
+
+        /// <summary>保存设置（原子写入：先写临时文件再替换，避免写入中断导致配置损坏）</summary>
         public static void Save(AppSettings settings)
         {
-            var directory = Path.GetDirectoryName(FilePath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                Directory.CreateDirectory(directory);
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
 
-            var serializer = new XmlSerializer(typeof(AppSettings));
-            using (var writer = new StreamWriter(FilePath, false, Encoding.UTF8))
+            lock (FileLock)
             {
-                serializer.Serialize(writer, settings);
+                var target = FilePath;
+                var directory = System.IO.Path.GetDirectoryName(target);
+                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                    Directory.CreateDirectory(directory);
+
+                var serializer = new XmlSerializer(typeof(AppSettings));
+                string tempPath = target + ".tmp";
+
+                using (var writer = new StreamWriter(tempPath, false, Encoding.UTF8))
+                {
+                    serializer.Serialize(writer, settings);
+                }
+
+                try
+                {
+                    if (File.Exists(target))
+                        File.Replace(tempPath, target, null);
+                    else
+                        File.Move(tempPath, target);
+                }
+                catch (Exception)
+                {
+                    // 极端情况下（如目标被占用）退化为覆盖写入
+                    File.Copy(tempPath, target, true);
+                    try { File.Delete(tempPath); } catch { }
+                }
             }
         }
 
         public static AppSettings Load()
         {
-            if (!File.Exists(FilePath))
+            var target = FilePath;
+            if (!File.Exists(target))
                 return null;
 
-            var serializer = new XmlSerializer(typeof(AppSettings));
-            using (var reader = new StreamReader(FilePath, Encoding.UTF8))
+            lock (FileLock)
             {
-                return serializer.Deserialize(reader) as AppSettings;
+                var serializer = new XmlSerializer(typeof(AppSettings));
+                using (var reader = new StreamReader(target, Encoding.UTF8))
+                {
+                    return serializer.Deserialize(reader) as AppSettings;
+                }
             }
         }
 

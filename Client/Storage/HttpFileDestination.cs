@@ -33,17 +33,25 @@ namespace U盘文件复制
         {
             relativePath = relativePath.Replace('\\', '/').TrimStart('/');
 
-            // 报告开始
-            long totalSize = 0;
-            try { totalSize = fileStream.Length; } catch { }
+            // 报告开始（流不支持 Length 时按 0 报告，不抛异常）
+            long totalSize = TryGetLength(fileStream) ?? 0;
             Progress?.Report((relativePath, 0, totalSize));
+
+            // 分块上传要求流可定位（断点续传需要 Seek + Length）。
+            // 限速模式使用 ThrottledStream（CanSeek = false），此时必须回退为整文件上传，
+            // 否则每个文件都会以「上传失败，已重试 3 次」告终。
+            long? length = TryGetLength(fileStream);
+            bool useChunked = _useChunkedUpload
+                              && fileStream.CanSeek
+                              && length.HasValue
+                              && length.Value > _config.ChunkSizeBytes;
 
             int retryCount = 0;
             while (retryCount <= _config.MaxRetries)
             {
                 try
                 {
-                    if (_useChunkedUpload && fileStream.Length > _config.ChunkSizeBytes)
+                    if (useChunked)
                     {
                         await NetworkHelper.UploadChunkedAsync(_config, relativePath, fileStream, _config.ChunkSizeBytes, cancellationToken);
                     }
@@ -68,6 +76,17 @@ namespace U盘文件复制
                 }
             }
             throw new IOException($"上传文件失败，已重试 {_config.MaxRetries} 次: {relativePath}");
+        }
+
+        /// <summary>安全获取流长度（不支持时返回 null）</summary>
+        private static long? TryGetLength(Stream stream)
+        {
+            try
+            {
+                return stream.Length;
+            }
+            catch (NotSupportedException) { return null; }
+            catch (ObjectDisposedException) { return null; }
         }
 
         public async Task<bool> FileExistsAsync(string relativePath, CancellationToken cancellationToken)

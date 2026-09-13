@@ -47,14 +47,33 @@ async function testConnection() {
     const text = document.getElementById('connText');
     try {
         const resp = await fetch(HEALTH_URL);
-        if (resp.ok) {
+        if (!resp.ok) throw new Error('健康检查失败');
+    } catch (e) {
+        dot.textContent = '🔴'; text.textContent = '未连接';
+        return false;
+    }
+
+    // 健康检查端点免认证，令牌无效时也会成功；必须再验证一次受保护接口
+    const token = localStorage.getItem('api_token');
+    if (!token) {
+        dot.textContent = '🟡'; text.textContent = '未设置令牌';
+        return false;
+    }
+
+    try {
+        const probe = await fetch(`${API_BASE}/stats`, { headers: { 'Authorization': `Bearer ${token}` } });
+        if (probe.ok) {
             dot.textContent = '🟢'; text.textContent = '已连接';
             dot.style.color = 'var(--success)';
             return true;
         }
-    } catch (e) {}
-    dot.textContent = '🔴'; text.textContent = '未连接';
-    return false;
+        dot.textContent = '🟡';
+        text.textContent = probe.status === 401 ? '令牌无效' : `异常 ${probe.status}`;
+        return false;
+    } catch (e) {
+        dot.textContent = '🔴'; text.textContent = '未连接';
+        return false;
+    }
 }
 
 // ============ 标签页切换 ============
@@ -99,12 +118,24 @@ function renderBreadcrumb() {
     let buildPath = '';
     parts.forEach((part, i) => {
         buildPath += (i ? '/' : '') + part;
-        html += `<span class="crumb-sep">/</span><span class="crumb" data-path="${buildPath}">${part}</span>`;
+        // 文本与属性都要转义：目录名可能包含引号或尖括号（存储型 XSS 入口）
+        html += `<span class="crumb-sep">/</span><span class="crumb" data-path="${escapeAttr(buildPath)}">${escHtml(part)}</span>`;
     });
     bc.innerHTML = html;
     bc.querySelectorAll('.crumb').forEach(el => {
         el.addEventListener('click', () => loadFileList(el.dataset.path, 1));
     });
+}
+
+/**
+ * 服务端以 UTC（ISO 8601 带 Z）下发时间，统一按本地时区展示。
+ * 旧版本服务端返回无时区标记的字符串，new Date() 会按本地时间解析，此处保持兼容。
+ */
+function fmtTime(value) {
+    if (!value) return '';
+    const d = new Date(value);
+    if (isNaN(d.getTime())) return value;
+    return d.toLocaleString('zh-CN', { hour12: false });
 }
 
 function formatSize(bytes) {
@@ -134,21 +165,21 @@ function renderFileTable(data) {
             const cleanPath = f.path.endsWith('/') ? f.path.slice(0, -1) : f.path;
             return `<tr>
                 <td></td>
-                <td><span class="dir-link" data-path="${cleanPath}">${icon} ${escHtml(f.name)}/</span></td>
+                <td><span class="dir-link" data-path="${escapeAttr(cleanPath)}">${icon} ${escHtml(f.name)}/</span></td>
                 <td class="size-col">-</td>
-                <td class="time-col">${f.lastWriteTimeUtc || ''}</td>
+                <td class="time-col">${fmtTime(f.lastWriteTimeUtc)}</td>
                 <td></td>
             </tr>`;
         }
         return `<tr>
-            <td><input type="checkbox" class="file-check" data-path="${escHtml(f.path)}"></td>
+            <td><input type="checkbox" class="file-check" data-path="${escapeAttr(f.path)}"></td>
             <td>${icon} ${escHtml(f.name)}</td>
             <td class="size-col">${formatSize(f.sizeBytes)}</td>
-            <td class="time-col">${f.lastWriteTimeUtc || ''}</td>
+            <td class="time-col">${fmtTime(f.lastWriteTimeUtc)}</td>
             <td class="action-col">
-                <button class="btn btn-sm btn-outline preview-btn" data-path="${escHtml(f.path)}">预览</button>
-                <button class="btn btn-sm btn-outline download-btn" data-path="${escHtml(f.path)}">下载</button>
-                <button class="btn btn-sm btn-danger delete-btn" data-path="${escHtml(f.path)}" data-name="${escHtml(f.name)}">删除</button>
+                <button class="btn btn-sm btn-outline preview-btn" data-path="${escapeAttr(f.path)}">预览</button>
+                <button class="btn btn-sm btn-outline download-btn" data-path="${escapeAttr(f.path)}">下载</button>
+                <button class="btn btn-sm btn-danger delete-btn" data-path="${escapeAttr(f.path)}" data-name="${escapeAttr(f.name)}">删除</button>
             </td>
         </tr>`;
     }).join('');
@@ -202,11 +233,33 @@ function getFileIcon(name) {
 
 function escHtml(str) {
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = str == null ? '' : str;
     return div.innerHTML;
 }
 
+/**
+ * 属性值转义。注意 escHtml 走 textContent→innerHTML，不会转义引号，
+ * 直接把它的结果放进 attr="..." 会被 " 闭合属性后注入事件处理器（存储型 XSS）。
+ */
+function escapeAttr(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 // ============ 预览/下载/删除 ============
+let previewObjectUrl = null;
+
+function releasePreviewObjectUrl() {
+    if (previewObjectUrl) {
+        URL.revokeObjectURL(previewObjectUrl);
+        previewObjectUrl = null;
+    }
+}
+
 async function previewFile(path) {
     const modal = document.getElementById('previewModal');
     const title = document.getElementById('previewTitle');
@@ -216,6 +269,8 @@ async function previewFile(path) {
     const binary = document.getElementById('previewBinary');
 
     title.textContent = path;
+    releasePreviewObjectUrl();
+    img.removeAttribute('src');
     code.style.display = 'none';
     img.style.display = 'none';
     binary.style.display = 'none';
@@ -229,14 +284,15 @@ async function previewFile(path) {
         const url = `${API_BASE}/download?path=${encodeURIComponent(path)}`;
         const token = getToken();
         const resp = await fetch(url, { headers: { 'Authorization': `Bearer ${token}` } });
-        if (!resp.ok) throw new Error('下载失败');
+        if (!resp.ok) throw new Error(`下载失败 (HTTP ${resp.status})`);
 
         const contentLength = resp.headers.get('Content-Length') || '?';
         info.innerHTML = `<span>大小: ${formatSize(parseInt(contentLength) || 0)}</span>`;
 
         if (imgExts.includes(ext)) {
             const blob = await resp.blob();
-            img.src = URL.createObjectURL(blob);
+            previewObjectUrl = URL.createObjectURL(blob);
+            img.src = previewObjectUrl;
             img.style.display = 'block';
         } else if (textExts.includes(ext) && (parseInt(contentLength) || 0) < 1024 * 1024) {
             const text = await resp.text();
@@ -247,23 +303,28 @@ async function previewFile(path) {
             document.getElementById('downloadBtn').onclick = () => downloadFile(path);
         }
     } catch (e) {
-        info.innerHTML = `<span style="color:red">错误: ${e.message}</span>`;
+        info.innerHTML = `<span style="color:red">错误: ${escHtml(e.message)}</span>`;
     }
 }
 
 function downloadFile(path) {
     const token = getToken();
     const url = `${API_BASE}/download?path=${encodeURIComponent(path)}`;
-    const a = document.createElement('a');
-    a.href = url;
     // 通过 fetch 方式带 token 下载
     fetch(url, { headers: { 'Authorization': `Bearer ${token}` } })
-        .then(r => r.blob())
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.blob();
+        })
         .then(blob => {
             const objUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
             a.href = objUrl;
             a.download = path.split('/').pop();
+            a.style.display = 'none';
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
             URL.revokeObjectURL(objUrl);
         })
         .catch(e => alert('下载失败: ' + e.message));
@@ -284,9 +345,13 @@ async function deleteFile(path, name) {
 // 弹窗关闭
 document.getElementById('modalClose').addEventListener('click', () => {
     document.getElementById('previewModal').style.display = 'none';
+    releasePreviewObjectUrl();
 });
 document.getElementById('previewModal').addEventListener('click', (e) => {
-    if (e.target.id === 'previewModal') e.target.style.display = 'none';
+    if (e.target.id === 'previewModal') {
+        e.target.style.display = 'none';
+        releasePreviewObjectUrl();
+    }
 });
 
 // ============ 文件上传 ============
@@ -355,48 +420,52 @@ document.getElementById('chunkUploadBtn').addEventListener('click', async () => 
     const chunkSizeMB = parseFloat(document.getElementById('chunkSizeMB').value);
     if (!path) { alert('请输入目标路径'); return; }
     if (!file) { alert('请选择文件'); return; }
+    if (!isFinite(chunkSizeMB) || chunkSizeMB <= 0) { alert('分块大小必须是大于 0 的数字'); return; }
 
     const btn = document.getElementById('chunkUploadBtn');
     const prog = document.getElementById('chunkProgress');
     btn.disabled = true;
-    const chunkSize = chunkSizeMB * 1024 * 1024;
-    const totalChunks = Math.ceil(file.size / chunkSize);
+    prog.textContent = '准备中...';
 
-    // 查询已上传分块
-    let uploaded = new Set();
     try {
-        const resp = await apiRequest(`${API_BASE}/chunk-status?path=${encodeURIComponent(path)}`);
-        uploaded = new Set(await resp.json());
-    } catch (e) {}
+        const chunkSize = chunkSizeMB * 1024 * 1024;
+        const totalChunks = Math.ceil(file.size / chunkSize);
 
-    for (let i = 0; i < totalChunks; i++) {
-        if (uploaded.has(i)) {
-            prog.textContent = `分块 ${i+1}/${totalChunks} 已存在，跳过...`;
-            continue;
+        // 查询已上传分块
+        let uploaded = new Set();
+        try {
+            const resp = await apiRequest(`${API_BASE}/chunk-status?path=${encodeURIComponent(path)}`);
+            uploaded = new Set(await resp.json());
+        } catch (e) { /* 忽略，按全量上传处理 */ }
+
+        for (let i = 0; i < totalChunks; i++) {
+            if (uploaded.has(i)) {
+                prog.textContent = `分块 ${i + 1}/${totalChunks} 已存在，跳过...`;
+                continue;
+            }
+            const start = i * chunkSize;
+            const end = Math.min(start + chunkSize, file.size);
+            const chunk = file.slice(start, end);
+            const chunkUrl = `${API_BASE}/chunk?path=${encodeURIComponent(path)}&index=${i}&total=${totalChunks}`;
+            await apiRequest(chunkUrl, {
+                method: 'PUT',
+                body: chunk,
+                headers: { 'Content-Type': 'application/octet-stream' }
+            });
+            prog.textContent = `上传分块 ${i + 1}/${totalChunks} 完成`;
         }
-        const start = i * chunkSize;
-        const end = Math.min(start + chunkSize, file.size);
-        const chunk = file.slice(start, end);
-        const chunkUrl = `${API_BASE}/chunk?path=${encodeURIComponent(path)}&index=${i}&total=${totalChunks}`;
-        const resp = await apiRequest(chunkUrl, {
-            method: 'PUT',
-            body: chunk,
-            headers: { 'Content-Type': 'application/octet-stream' }
-        });
-        if (!resp.ok) { prog.textContent = `分块 ${i} 上传失败`; btn.disabled = false; return; }
-        prog.textContent = `上传分块 ${i+1}/${totalChunks} 完成`;
-    }
 
-    prog.textContent = '正在合并文件...';
-    const mergeUrl = `${API_BASE}/merge?path=${encodeURIComponent(path)}&total=${totalChunks}`;
-    const mergeResp = await apiRequest(mergeUrl, { method: 'POST' });
-    if (mergeResp.ok) {
+        prog.textContent = '正在合并文件...';
+        const mergeUrl = `${API_BASE}/merge?path=${encodeURIComponent(path)}&total=${totalChunks}`;
+        await apiRequest(mergeUrl, { method: 'POST' });
         prog.textContent = '分块上传完成！';
         alert('分块上传并合并成功');
-    } else {
-        prog.textContent = '合并失败';
+    } catch (e) {
+        prog.textContent = `分块上传失败: ${e.message}`;
+    } finally {
+        // 原实现失败时会跳过按钮恢复，导致按钮永久禁用
+        btn.disabled = false;
     }
-    btn.disabled = false;
 });
 
 // ============ 文件搜索 ============
@@ -434,10 +503,10 @@ async function doSearch(page) {
                 <td>${getFileIcon(f.name)} ${escHtml(f.name)}</td>
                 <td style="font-size:12px;color:var(--text-muted)">${escHtml(f.path)}</td>
                 <td style="text-align:right">${formatSize(f.sizeBytes)}</td>
-                <td style="font-size:13px;color:var(--text-muted)">${f.lastWriteTimeUtc || ''}</td>
+                <td style="font-size:13px;color:var(--text-muted)">${fmtTime(f.lastWriteTimeUtc)}</td>
                 <td class="action-col">
-                    <button class="btn btn-sm btn-outline preview-btn" data-path="${escHtml(f.path)}">预览</button>
-                    <button class="btn btn-sm btn-outline download-btn" data-path="${escHtml(f.path)}">下载</button>
+                    <button class="btn btn-sm btn-outline preview-btn" data-path="${escapeAttr(f.path)}">预览</button>
+                    <button class="btn btn-sm btn-outline download-btn" data-path="${escapeAttr(f.path)}">下载</button>
                 </td>
             </tr>
         `).join('') || '<tr><td colspan="5" class="empty-msg">未找到匹配文件</td></tr>';
@@ -538,10 +607,10 @@ function renderTrashTable(items) {
             <td>${getFileIcon(f.name)} ${escHtml(f.name)}</td>
             <td style="font-size:12px;color:var(--text-muted)">${escHtml(original)}</td>
             <td class="size-col">${formatSize(f.sizeBytes)}</td>
-            <td class="time-col">${f.lastWriteTimeUtc || ''}</td>
+            <td class="time-col">${fmtTime(f.lastWriteTimeUtc)}</td>
             <td class="action-col">
-                <button class="btn btn-sm btn-outline restore-btn" data-path="${escHtml(f.path)}">恢复</button>
-                <button class="btn btn-sm btn-danger trash-del-btn" data-path="${escHtml(f.path)}">彻底删除</button>
+                <button class="btn btn-sm btn-outline restore-btn" data-path="${escapeAttr(f.path)}">恢复</button>
+                <button class="btn btn-sm btn-danger trash-del-btn" data-path="${escapeAttr(f.path)}">彻底删除</button>
             </td>
         </tr>`;
     }).join('');

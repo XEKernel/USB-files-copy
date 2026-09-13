@@ -58,8 +58,9 @@ namespace U盘文件复制.Server.Middleware
                 return;
             }
 
-            // 健康检查端点免认证
-            if (rawPath.StartsWith("/api/health", StringComparison.OrdinalIgnoreCase))
+            // 健康检查端点免认证（精确匹配：前缀匹配会让 /api/healthxxx 一并放行）
+            if (rawPath.Equals("/api/health", StringComparison.OrdinalIgnoreCase) ||
+                rawPath.Equals("/api/health/", StringComparison.OrdinalIgnoreCase))
             {
                 await _next(context);
                 return;

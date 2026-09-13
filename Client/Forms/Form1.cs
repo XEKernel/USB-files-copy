@@ -62,9 +62,16 @@ namespace U盘文件复制
 
             this.KeyPreview = true;
 
+            // 设置保存防抖定时器（合并连续输入触发的写盘）
+            _settingsSaveTimer.Tick += OnSettingsSaveTimerTick;
+
             // 设置默认值 + 加载保存的设置
+            // 注意：_settingsLoaded 为 false 期间任何保存请求都会被忽略，
+            // 否则 SetDefaultValues 触发的事件会用默认值覆盖用户的 settings.xml
             SetDefaultValues();
             LoadSettings();
+
+            _logEngine.Write($"配置文件位置：{SettingsStore.FilePath}", false);
 
             // 根据用户选择的保存位置创建对应的文件存储目标（本地或服务器）
             _currentDestination = CreateFileDestination();

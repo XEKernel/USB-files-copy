@@ -36,12 +36,26 @@ namespace U盘文件复制
 
         private string GetFullPath(string relativePath)
         {
+            if (string.IsNullOrWhiteSpace(relativePath))
+                throw new ArgumentException("路径不能为空", nameof(relativePath));
+
             relativePath = relativePath.Replace('\\', Path.DirectorySeparatorChar)
                                        .Replace('/', Path.DirectorySeparatorChar)
                                        .TrimStart(Path.DirectorySeparatorChar);
+
+            // 显式拒绝向上跳转
+            foreach (var segment in relativePath.Split(Path.DirectorySeparatorChar))
+            {
+                if (segment == "..")
+                    throw new UnauthorizedAccessException($"路径遍历攻击: {relativePath}");
+            }
+
             var fullPath = Path.GetFullPath(Path.Combine(_rootDirectory, relativePath));
 
-            if (!fullPath.StartsWith(_rootDirectory, StringComparison.OrdinalIgnoreCase))
+            // 目录边界比较：仅前缀比较会把 "D:\root2\x" 误判为落在 "D:\root" 之内
+            string rootWithSeparator = _rootDirectory.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!fullPath.StartsWith(rootWithSeparator, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(fullPath, _rootDirectory, StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException($"路径遍历攻击: {relativePath}");
 
             return fullPath;

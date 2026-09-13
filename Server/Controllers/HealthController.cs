@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Reflection;
 
 namespace U盘文件复制.Server.Controllers
 {
@@ -9,6 +10,9 @@ namespace U盘文件复制.Server.Controllers
     [Route("api/[controller]")]
     public class HealthController : ControllerBase
     {
+        private static readonly string Version =
+            Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+
         /// <summary>
         /// 健康检查端点
         /// </summary>
@@ -19,7 +23,7 @@ namespace U盘文件复制.Server.Controllers
             {
                 status = "ok",
                 timestamp = DateTime.UtcNow,
-                version = "1.0.0"
+                version = Version
             });
         }
     }

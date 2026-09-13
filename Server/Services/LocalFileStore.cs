@@ -12,20 +12,32 @@ namespace U盘文件复制.Server.Services
     public class LocalFileStore : IFileStore
     {
         private readonly string _rootPath;
+        private readonly string _rootPathWithSeparator;
         private readonly string _tempChunkFolder;
         private readonly long _maxFileSizeBytes;
+        private readonly long _maxChunkSizeBytes;
+        private readonly HashSet<string> _reservedFileNames;
 
         /// <summary>回收站目录名（软删除文件存放处）</summary>
         public const string TrashFolderName = ".trash";
 
+        /// <summary>默认受保护的系统文件名（索引库、审计日志），不参与文件服务</summary>
+        public static readonly string[] DefaultReservedFileNames = { "fileindex.db", "audit.log" };
+
         /// <summary>SQLite 文件索引（搜索加速）</summary>
         private readonly FileIndex _index;
 
-        public LocalFileStore(string rootPath, string tempChunkFolder, long maxFileSizeBytes)
+        public LocalFileStore(string rootPath, string tempChunkFolder, long maxFileSizeBytes,
+            long maxChunkSizeBytes = 0, IEnumerable<string>? reservedFileNames = null)
         {
             _rootPath = Path.GetFullPath(rootPath);
-            _tempChunkFolder = tempChunkFolder ?? "_chunks";
-            _maxFileSizeBytes = maxFileSizeBytes;
+            _rootPathWithSeparator = _rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                                     + Path.DirectorySeparatorChar;
+            _tempChunkFolder = NormalizeFolderName(tempChunkFolder) ?? "_chunks";
+            _maxFileSizeBytes = maxFileSizeBytes > 0 ? maxFileSizeBytes : 1073741824L;
+            _maxChunkSizeBytes = maxChunkSizeBytes > 0 ? maxChunkSizeBytes : 16 * 1024 * 1024;
+            _reservedFileNames = new HashSet<string>(
+                reservedFileNames ?? DefaultReservedFileNames, StringComparer.OrdinalIgnoreCase);
 
             // 确保存储根目录存在
             Directory.CreateDirectory(_rootPath);
@@ -36,42 +48,104 @@ namespace U盘文件复制.Server.Services
             Task.Run(() => _index.Rebuild(_rootPath, IsExcludedPath, null));
         }
 
+        /// <summary>临时目录名只允许单层目录名，避免配置成 "a/b" 后写到存储根之外</summary>
+        private static string? NormalizeFolderName(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return null;
+            var trimmed = name.Trim().Trim('/', '\\');
+            if (trimmed.Length == 0) return null;
+            if (trimmed.IndexOf('/') >= 0 || trimmed.IndexOf('\\') >= 0 || trimmed == "." || trimmed == "..")
+                throw new ArgumentException($"临时目录名非法：{name}", nameof(name));
+            return trimmed;
+        }
+
+        /// <summary>
+        /// 将相对路径解析为存储根内的绝对路径。
+        /// 任何越界（".." 跳转、绝对路径、盘符、UNC）一律拒绝。
+        /// 注意不能只做字符串前缀比较：根为 "...\Storage" 时 "...\Storage_backup\x" 也满足前缀。
+        /// </summary>
         private string GetSafeFullPath(string relativePath)
         {
             if (string.IsNullOrWhiteSpace(relativePath))
                 throw new ArgumentException("路径不能为空", nameof(relativePath));
 
-            // 防止路径遍历攻击
-            relativePath = relativePath.Replace('\\', Path.DirectorySeparatorChar)
-                                       .Replace('/', Path.DirectorySeparatorChar)
-                                       .TrimStart(Path.DirectorySeparatorChar);
-            var fullPath = Path.GetFullPath(Path.Combine(_rootPath, relativePath));
-            if (!fullPath.StartsWith(_rootPath, StringComparison.OrdinalIgnoreCase))
+            // 统一分隔符，去掉前导分隔符
+            var normalized = relativePath.Replace('\\', Path.DirectorySeparatorChar)
+                                         .Replace('/', Path.DirectorySeparatorChar)
+                                         .TrimStart(Path.DirectorySeparatorChar);
+
+            // 显式拒绝向上跳转（同时覆盖大小写/分隔符变体）
+            foreach (var segment in normalized.Split(Path.DirectorySeparatorChar))
+            {
+                if (segment == "..")
+                    throw new UnauthorizedAccessException("路径遍历攻击");
+            }
+
+            var fullPath = Path.GetFullPath(Path.Combine(_rootPath, normalized));
+
+            // 目录边界比较
+            if (!fullPath.StartsWith(_rootPathWithSeparator, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(fullPath, _rootPath, StringComparison.OrdinalIgnoreCase))
                 throw new UnauthorizedAccessException("路径遍历攻击");
+
             return fullPath;
+        }
+
+        /// <summary>
+        /// 判断相对路径是否指向受保护的系统文件（索引库 / 审计日志）。
+        /// 这些文件位于存储根内，若不屏蔽会被列出、下载甚至删除。
+        /// </summary>
+        private bool IsReservedRelativePath(string relativePath)
+        {
+            if (string.IsNullOrWhiteSpace(relativePath)) return false;
+            var normalized = relativePath.Replace('\\', '/').Trim('/');
+            int idx = normalized.LastIndexOf('/');
+            var name = idx >= 0 ? normalized.Substring(idx + 1) : normalized;
+            return name.Length > 0 && _reservedFileNames.Contains(name);
+        }
+
+        private void EnsureNotReserved(string relativePath)
+        {
+            if (IsReservedRelativePath(relativePath))
+                throw new UnauthorizedAccessException($"受保护的系统文件，不允许通过文件接口访问：{relativePath}");
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
 
         private string GetChunkDirectory(string relativePath)
         {
             // 临时分块目录：_rootPath/_tempChunkFolder/相对路径的目录部分
-            var chunkRoot = Path.Combine(_rootPath, _tempChunkFolder);
-            var relativeDir = Path.GetDirectoryName(relativePath) ?? "";
-            var chunkDir = Path.Combine(chunkRoot, relativeDir);
+            // 目录部分必须通过存储根边界校验，否则 path=../.. 会把分块写到存储根之外
+            var relativeDir = Path.GetDirectoryName(relativePath.Replace('\\', '/')) ?? string.Empty;
+            var safeDir = string.IsNullOrEmpty(relativeDir) ? _rootPath : GetSafeFullPath(relativeDir);
+            var chunkDir = Path.Combine(safeDir, _tempChunkFolder);
             Directory.CreateDirectory(chunkDir);
             return chunkDir;
         }
 
         private string GetChunkFilePath(string relativePath, int chunkIndex)
         {
+            EnsureNotReserved(relativePath);
+
+            var fileName = Path.GetFileName(relativePath.Replace('\\', '/'));
+            if (string.IsNullOrEmpty(fileName) || fileName == "." || fileName == "..")
+                throw new UnauthorizedAccessException($"非法路径：{relativePath}");
+
             var chunkDir = GetChunkDirectory(relativePath);
-            var fileName = $"{Path.GetFileName(relativePath)}.part_{chunkIndex}";
-            return Path.Combine(chunkDir, fileName);
+            return Path.Combine(chunkDir, $"{fileName}.part_{chunkIndex}");
         }
 
         public Task<bool> FileExistsAsync(string relativePath)
         {
             try
             {
+                // 系统文件对外表现为「已存在」，配合默认的跳过策略即可避免覆盖
+                if (IsReservedRelativePath(relativePath))
+                    return Task.FromResult(true);
+
                 var fullPath = GetSafeFullPath(relativePath);
                 return Task.FromResult(File.Exists(fullPath));
             }
@@ -99,6 +173,8 @@ namespace U盘文件复制.Server.Services
 
         public async Task WriteFileAsync(string relativePath, Stream fileStream)
         {
+            EnsureNotReserved(relativePath);
+
             // 尝试获取流长度（有些流不支持，如 HttpRequestStream）
             long? fileLength = null;
             try
@@ -115,9 +191,18 @@ namespace U盘文件复制.Server.Services
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);
 
-            using (var destStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
+            try
             {
-                await fileStream.CopyToAsync(destStream);
+                using (var destStream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
+                {
+                    await CopyWithLimitAsync(fileStream, destStream, _maxFileSizeBytes, "文件大小超过限制");
+                }
+            }
+            catch
+            {
+                // 超限/中断时不要留下截断的半个文件
+                TryDeleteFile(fullPath);
+                throw;
             }
 
             // 增量更新索引
@@ -125,8 +210,28 @@ namespace U盘文件复制.Server.Services
             _index.Upsert(relativePath.Replace('\\', '/'), fi.Name, fi.Length, fi.LastWriteTimeUtc);
         }
 
+        /// <summary>
+        /// 带总量上限的流拷贝：客户端不传 Content-Length 或分块上传时，
+        /// 仅靠 Length 判断大小会被绕过，必须在写入过程中累计校验。
+        /// </summary>
+        private static async Task CopyWithLimitAsync(Stream source, Stream destination, long maxBytes, string errorPrefix)
+        {
+            var buffer = new byte[81920];
+            long written = 0;
+            int read;
+            while ((read = await source.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                written += read;
+                if (maxBytes > 0 && written > maxBytes)
+                    throw new IOException($"{errorPrefix} ({maxBytes} 字节)");
+                await destination.WriteAsync(buffer, 0, read);
+            }
+        }
+
         public async Task DeleteFileAsync(string relativePath)
         {
+            EnsureNotReserved(relativePath);
+
             var fullPath = GetSafeFullPath(relativePath);
             if (!File.Exists(fullPath))
             {
@@ -284,10 +389,16 @@ namespace U盘文件复制.Server.Services
         }
 
         /// <summary>
-        /// 排除临时分块目录与回收站目录
+        /// 排除临时分块目录、回收站目录与受保护的系统文件
         /// </summary>
         private bool IsExcludedPath(string fullPath)
         {
+            if (string.IsNullOrEmpty(fullPath)) return false;
+
+            // 索引库 / 审计日志等系统文件：不参与列表、搜索与统计
+            if (_reservedFileNames.Contains(Path.GetFileName(fullPath)))
+                return true;
+
             var normalized = fullPath.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
             string chunkMarker = Path.DirectorySeparatorChar + _tempChunkFolder + Path.DirectorySeparatorChar;
             string trashMarker = Path.DirectorySeparatorChar + TrashFolderName + Path.DirectorySeparatorChar;
@@ -317,17 +428,28 @@ namespace U盘文件复制.Server.Services
 
         public async Task UploadChunkAsync(string relativePath, int chunkIndex, int totalChunks, Stream chunkStream)
         {
-            // 大小限制由 [RequestSizeLimit] 在控制器层校验，此处不检查 stream.Length（HttpRequestStream 不支持 .Length）
-
+            // 单个分块同样需要大小上限：客户端可不声明 Content-Length，
+            // 只靠 Kestrel 的全局请求体上限无法阻止大量分块灌满磁盘
             var chunkFilePath = GetChunkFilePath(relativePath, chunkIndex);
-            using (var destStream = new FileStream(chunkFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
+
+            try
             {
-                await chunkStream.CopyToAsync(destStream);
+                using (var destStream = new FileStream(chunkFilePath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, FileOptions.Asynchronous))
+                {
+                    await CopyWithLimitAsync(chunkStream, destStream, _maxChunkSizeBytes, "单个分块超过限制");
+                }
+            }
+            catch
+            {
+                TryDeleteFile(chunkFilePath);
+                throw;
             }
         }
 
         public async Task MergeChunksAsync(string relativePath, int totalChunks)
         {
+            EnsureNotReserved(relativePath);
+
             var fullTargetPath = GetSafeFullPath(relativePath);
             var directory = Path.GetDirectoryName(fullTargetPath);
             if (!string.IsNullOrEmpty(directory))
@@ -432,6 +554,8 @@ namespace U盘文件复制.Server.Services
 
         public Task<(Stream fileStream, long fileSize, DateTime lastModifiedUtc)> OpenFileForReadAsync(string relativePath)
         {
+            EnsureNotReserved(relativePath);
+
             var fullPath = GetSafeFullPath(relativePath);
             if (!File.Exists(fullPath))
                 throw new FileNotFoundException($"文件不存在: {relativePath}");

@@ -34,6 +34,13 @@ packages/
 
 # 服务端运行时文件
 U盘文件复制.Server/uploads/
+Server/Storage/
+Server/audit.log
+Storage/
+_chunks/
+
+# 服务端本地配置（含访问令牌，禁止提交；示例见 Server/appsettings.Example.json）
+Server/appsettings.json
 
 # WorkBuddy
 .workbuddy/memory/

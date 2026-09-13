@@ -6,6 +6,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>U盘文件复制.Server</RootNamespace>
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
+    <!-- 与客户端版本保持一致，/api/health 会返回该版本号 -->
+    <Version>1.6.0</Version>
+    <AssemblyVersion>1.6.0.0</AssemblyVersion>
+    <FileVersion>1.6.0.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>

@@ -124,6 +124,21 @@ jobs:
           cd Server/linux-x64 && ./U盘文件复制.Server
           ```
           默认监听 `http://localhost:5000`，Web 管理面板直接浏览器访问。
+
+          ### ⚠️ 首次部署必读（服务端）
+
+          出于安全考虑，发布包内**不包含 `appsettings.json`**（避免访问令牌被公开）。首次运行前：
+
+          ```bash
+          # 1. 复制示例配置
+          cp appsettings.Example.json appsettings.json
+
+          # 2. 生成随机令牌并填入 FileStorage:AllowedTokens
+          openssl rand -hex 24
+          ```
+
+          未配置令牌时服务端会拒绝启动并打印提示。
+          建议改用环境变量注入，避免令牌落盘：`FileStorage__AllowedTokens__0=<你的令牌>`
         draft: false
         prerelease: false
         files: USB-Files-Copy-v${{ steps.version.outputs.ver }}.zip

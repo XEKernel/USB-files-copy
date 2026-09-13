@@ -39,17 +39,14 @@ namespace U盘文件复制
                 grpServerConfig.Enabled = false;
                 btnTestConn.Enabled = false;
                 _btnBrowseRemote.Enabled = false;
-                SaveSettings();
-                // 切换后重新创建目标
-                _currentDestination = CreateFileDestination();
+                RequestDelayedSave();
             };
             rdoServerSave.CheckedChanged += (s, e) =>
             {
                 grpServerConfig.Enabled = true;
                 btnTestConn.Enabled = true;
                 _btnBrowseRemote.Enabled = true;
-                SaveSettings();
-                _currentDestination = CreateFileDestination();
+                RequestDelayedSave();
             };
             // 初始状态
             grpServerConfig.Enabled = rdoServerSave.Checked;
@@ -59,15 +56,15 @@ namespace U盘文件复制
             // 测试连接按钮
             btnTestConn.Click += async (s, e) => await TestServerConnection();
 
-            // 任何配置项改变时自动保存并重建目标
-            txtServerAddress.TextChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
-            txtServerPassword.TextChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
-            txtServerToken.TextChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
-            txtServerPort.TextChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
-            chkUseHttps.CheckedChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
-            chkChunkedUpload.CheckedChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
-            txtChunkSize.TextChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
-            cmbChunkUnit.SelectedIndexChanged += (s, e) => { SaveSettings(); _currentDestination = CreateFileDestination(); };
+            // 任何配置项改变时延迟保存（合并连续输入，避免每敲一个字符就写盘并重建连接）
+            txtServerAddress.TextChanged += (s, e) => RequestDelayedSave();
+            txtServerPassword.TextChanged += (s, e) => RequestDelayedSave();
+            txtServerToken.TextChanged += (s, e) => RequestDelayedSave();
+            txtServerPort.TextChanged += (s, e) => RequestDelayedSave();
+            chkUseHttps.CheckedChanged += (s, e) => RequestDelayedSave();
+            chkChunkedUpload.CheckedChanged += (s, e) => RequestDelayedSave();
+            txtChunkSize.TextChanged += (s, e) => RequestDelayedSave();
+            cmbChunkUnit.SelectedIndexChanged += (s, e) => RequestDelayedSave();
         }
 
         /// <summary>
@@ -93,8 +90,11 @@ namespace U盘文件复制
             lblConnStatus.Text = "测试中...";
             try
             {
-                bool success = await NetworkHelper.TestConnectionAsync(config);
-                lblConnStatus.Text = success ? "连接成功" : "连接失败，请检查配置";
+                // 走受保护的统计接口：健康检查免认证，无法反映令牌是否正确
+                var (ok, message) = await NetworkHelper.VerifyConnectionAsync(config);
+                lblConnStatus.Text = message;
+                if (!ok)
+                    LogMessage($"服务器连接测试失败：{message}", true);
             }
             catch (Exception ex)
             {
@@ -450,25 +450,21 @@ namespace U盘文件复制
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
+            // 退出前同步保存并释放资源：
+            // 原实现用 fire-and-forget 的异步清理（内部先 Task.Delay(500)），
+            // 进程往往已经退出，导致设置与托盘/钩子资源实际未被处理。
             SaveSettings();
-            _cts?.Cancel();
-            _ = CleanupResourcesAsync();
-            base.OnFormClosing(e);
-        }
 
-        private async Task CleanupResourcesAsync()
-        {
-            try
-            {
-                await Task.Delay(500);
-                _usbMonitor.Dispose();
-                _keyboardHook.Dispose();
-                DisposeTrayIcon();
-                _cts?.Cancel();
-                _cts?.Dispose();
-                _copyLock?.Dispose();
-            }
-            catch { }
+            try { _settingsSaveTimer.Stop(); } catch { }
+            _cts?.Cancel();
+
+            try { _usbMonitor.Dispose(); } catch { }
+            try { _keyboardHook.Dispose(); } catch { }
+            DisposeTrayIcon();
+
+            try { _cts?.Dispose(); } catch { }
+
+            base.OnFormClosing(e);
         }
 
         private void btnBrowseDir_Click(object sender, EventArgs e)
@@ -480,7 +476,10 @@ namespace U盘文件复制
                     txtTargetDir.Text = fbd.SelectedPath;
                     // 本地目录变化时，如果是本地模式需要重建目标
                     if (rdoLocalSave.Checked)
+                    {
                         _currentDestination = CreateFileDestination();
+                        RequestDelayedSave();
+                    }
                 }
             }
         }
@@ -531,19 +530,22 @@ namespace U盘文件复制
             var config = BuildServerConfigFromUi();
             if (config == null) return;
 
-            // 先测试连接
+            // 先校验连接与认证（健康检查免认证，不能只用它判断）
             lblConnStatus.Text = "测试连接中...";
             bool connected = false;
+            string connectMessage = "连接失败";
             try
             {
-                connected = await NetworkHelper.TestConnectionAsync(config);
+                var (ok, message) = await NetworkHelper.VerifyConnectionAsync(config);
+                connected = ok;
+                connectMessage = message;
             }
             catch { }
 
             if (!connected)
             {
-                lblConnStatus.Text = "连接失败";
-                MessageBox.Show("服务器连接失败，请检查配置。", "连接失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                lblConnStatus.Text = connectMessage;
+                MessageBox.Show($"无法访问服务器：{connectMessage}", "连接失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 

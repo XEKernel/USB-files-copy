@@ -133,14 +133,14 @@ namespace U盘文件复制.Core
                         action = SpecialFileAction.ReverseCopy;
                         return true;
                     }
-                }
 
-                // 历史反向复制标记（兼容旧版）
-                string legacyPath = Path.Combine(drive.RootDirectory.FullName, options.ReverseCopyIndicator);
-                if (File.Exists(legacyPath))
-                {
-                    action = SpecialFileAction.ReverseCopy;
-                    return true;
+                    // 历史反向复制标记（兼容旧版）：同样受开关约束，否则 U 盘上的同名文件会意外触发反向复制
+                    string legacyPath = Path.Combine(drive.RootDirectory.FullName, options.ReverseCopyIndicator);
+                    if (File.Exists(legacyPath))
+                    {
+                        action = SpecialFileAction.ReverseCopy;
+                        return true;
+                    }
                 }
             }
             catch (Exception ex)
@@ -718,11 +718,9 @@ namespace U盘文件复制.Core
 
         private string GetLocalBackupPath(DriveInfo drive, CopyOptions options)
         {
-            string folderName = SanitizeFolderName(!string.IsNullOrWhiteSpace(drive.VolumeLabel)
-                ? drive.VolumeLabel
-                : $"{drive.Name.Replace(":\\", "")}_DRIVE");
-
-            return Path.Combine(options.TargetDirectory, folderName);
+            // 必须与正向复制使用同一套目录命名（卷标_卷序列号），
+            // 否则反向复制永远找不到正向复制生成的备份目录。
+            return Path.Combine(options.TargetDirectory, CreateDriveFolderName(drive, options));
         }
 
         private static string SanitizeFolderName(string name)
@@ -816,7 +814,13 @@ namespace U盘文件复制.Core
             public override bool CanRead => true;
             public override bool CanSeek => false;
             public override bool CanWrite => false;
-            public override long Length => throw new NotSupportedException();
+
+            /// <summary>
+            /// 透出内层流长度：HttpFileDestination 需要靠它判断是否走分块上传。
+            /// 内层不支持时抛 NotSupportedException（调用方需自行兜底）。
+            /// </summary>
+            public override long Length => _inner.Length;
+
             public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
             public override void Flush() { }
             public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

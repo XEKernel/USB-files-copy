@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 内容安全策略：脚本只允许同源文件，降低前端注入（XSS）被利用的风险 -->
+    <meta http-equiv="Content-Security-Policy"
+          content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'none'">
     <title>U盘文件复制器 - 管理面板</title>
     <link rel="stylesheet" href="css/style.css">
 </head>
