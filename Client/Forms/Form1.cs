@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -31,6 +32,17 @@ namespace U盘文件复制
 
         // 限速值（由界面选择，构建 CopyOptions 时传入后端）
         private int _currentSpeedLimit = 2 * 1024 * 1024; // 默认 2 MB/秒
+
+        // ===== 启动扫描（补处理「软件启动前就已插入」的 U 盘） =====
+        // WMI 卷变更事件只对监听开始之后发生的插入生效，
+        // 开机前/启动前就插好的 U 盘不会产生事件，需在启动时主动补扫一次。
+        private List<string> _startupRemovableDriveNames = new List<string>();
+
+        /// <summary>启动扫描的等待间隔（毫秒）：开机自启时资源管理器可能尚未枚举完可移动卷</summary>
+        private const int StartupScanDelayMs = 2000;
+
+        /// <summary>启动扫描最大尝试次数（卷迟迟未就绪时放弃）</summary>
+        private const int StartupScanMaxAttempts = 4;
 
         public Form1()
         {
@@ -71,6 +83,10 @@ namespace U盘文件复制
             SetDefaultValues();
             LoadSettings();
 
+            // 启动阶段的日志先写到配置目录，便于事后排查「启动扫描是否执行」这类问题；
+            // 开始复制后 GetLogFilePath() 会把它改为写入目标目录。
+            _logEngine.LogFilePath = Path.Combine(SettingsStore.DirectoryPath, "CopyLog.txt");
+
             // 标题由程序集版本生成（Designer 里硬编码的版本号容易与实际版本不一致）
             var assemblyVersion = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
             this.Text = $"U盘文件复制器 v{assemblyVersion?.ToString(3) ?? "0.0.0"}";
@@ -103,6 +119,9 @@ namespace U盘文件复制
                     this.Hide();
                 };
             }
+
+            // 启动扫描：补处理「软件启动前就已插入」的 U 盘（WMI 不会为这类设备产生事件）
+            this.Load += async (s, e) => await RunStartupDriveScanAsync();
         }
 
         /// <summary>
@@ -125,17 +144,70 @@ namespace U盘文件复制
         }
 
         /// <summary>
-        /// 启动 USB 监听器
+        /// 启动 USB 监听器，并快照当前已存在的可移动驱动器
         /// </summary>
         private void InitializeUsbWatcher()
         {
             try
             {
+                // 顺序很关键：先启动监听，再快照。
+                // 这样「监听开始后新插入」的设备由 WMI 事件处理，快照里只剩下启动前就已插好的，
+                // 两者不会对同一个设备重复触发复制。
                 _usbMonitor.Start();
+                _startupRemovableDriveNames = UsbMonitor.GetPresentRemovableDriveNames();
             }
             catch (Exception ex)
             {
                 _logEngine.Write($"初始化失败: {ex.Message}", true);
+            }
+        }
+
+        /// <summary>
+        /// 启动扫描：处理「软件启动前就已插入」的 U 盘。
+        /// WMI 的卷变更事件只对监听开始之后发生的插入生效，开机前就插好的盘不会被事件捕获，
+        /// 所以这里在界面就绪后主动补扫一次。
+        /// </summary>
+        private async Task RunStartupDriveScanAsync()
+        {
+            try
+            {
+                if (_startupRemovableDriveNames.Count == 0)
+                {
+                    _logEngine.Write("启动扫描：未检测到启动前已插入的可移动驱动器", false);
+                    return;
+                }
+
+                for (int attempt = 1; attempt <= StartupScanMaxAttempts; attempt++)
+                {
+                    // 开机自启时资源管理器可能还没枚举完，先等一会儿再确认卷是否就绪
+                    await Task.Delay(StartupScanDelayMs);
+
+                    var readyNames = _copyEngine.GetRemovableDrives().Select(d => d.Name).ToList();
+                    bool anyReady = _startupRemovableDriveNames
+                        .Any(n => readyNames.Contains(n, StringComparer.OrdinalIgnoreCase));
+
+                    if (anyReady)
+                    {
+                        _logEngine.Write(
+                            $"启动扫描：检测到启动前已插入的U盘（{string.Join("、", _startupRemovableDriveNames)}），开始处理", false);
+
+                        // 不隐藏主窗口：启动扫描不是「用户刚插入」的场景，
+                        // 刚打开界面就自己消失会让人莫名。
+                        await HandleUsbInsertedAsync(_startupRemovableDriveNames, hideMainWindow: false);
+                        return;
+                    }
+
+                    if (attempt < StartupScanMaxAttempts)
+                        continue;
+
+                    _logEngine.Write(
+                        $"启动扫描：驱动器 {string.Join("、", _startupRemovableDriveNames)} 尚未就绪，本次跳过（可重新插拔后再试）", true);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Load 事件是 async void，异常必须在此兜底，否则会终止进程
+                _logEngine.Write($"启动扫描失败：{ex.Message}", true);
             }
         }
 
@@ -159,11 +231,23 @@ namespace U盘文件复制
         /// </summary>
         private async void OnUsbInserted()
         {
+            await HandleUsbInsertedAsync(null, hideMainWindow: true);
+        }
+
+        /// <summary>
+        /// 执行一次复制流程（插入事件与启动扫描共用）。
+        /// </summary>
+        /// <param name="onlyDriveNames">仅处理这些盘符；null 表示处理全部可移动驱动器</param>
+        /// <param name="hideMainWindow">是否隐藏主窗口（插入事件时隐藏，启动扫描时不隐藏）</param>
+        private async Task HandleUsbInsertedAsync(IEnumerable<string> onlyDriveNames, bool hideMainWindow)
+        {
             if (!await _copyLock.WaitAsync(0)) return;
 
             try
             {
-                await SafeInvokeAsync(() => this.Hide());
+                if (hideMainWindow)
+                    await SafeInvokeAsync(() => this.Hide());
+
                 _cts = new CancellationTokenSource();
 
                 // 根据当前用户选择的保存位置，创建对应的文件存储目标
@@ -184,6 +268,10 @@ namespace U盘文件复制
 
                 foreach (var drive in _copyEngine.GetRemovableDrives())
                 {
+                    if (onlyDriveNames != null &&
+                        !onlyDriveNames.Contains(drive.Name, StringComparer.OrdinalIgnoreCase))
+                        continue;
+
                     _copyEngine.RecordDriveInsertion(drive);
                     string driveId = _copyEngine.GetDriveId(drive);
                     _logEngine.Write($"检测到U盘插入: {drive.Name} (ID: {driveId})", true);
