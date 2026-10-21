@@ -44,3 +44,6 @@ Server/appsettings.json
 
 # WorkBuddy
 .workbuddy/memory/
+
+# C++ 构建输出
+out/
