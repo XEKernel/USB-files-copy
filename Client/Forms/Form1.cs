@@ -72,6 +72,9 @@ namespace U盘文件复制
             SetupNotifyControls();
             SetupWhitelistControls();
 
+            // 所有配置控件「改完即存」（600ms 防抖），不再依赖退出时保存
+            SetupAutoSave();
+
             this.KeyPreview = true;
 
             // 设置保存防抖定时器（合并连续输入触发的写盘）

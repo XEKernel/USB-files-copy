@@ -18,13 +18,78 @@ namespace U盘文件复制
         private bool _settingsLoadErrorShown;
 
         /// <summary>
-        /// 立即保存设置（初始化阶段无效）。仅在退出、以及需要立刻落盘的场景调用。
+        /// 立即保存设置（初始化阶段无效）。仅在退出、显式点「保存设置」等场景调用。
         /// </summary>
-        private void SaveSettings()
+        private bool SaveSettings()
         {
-            if (!_settingsLoaded) return;
+            if (!_settingsLoaded) return false;
             _settingsSaveTimer.Stop();
-            SaveSettingsCore();
+            return SaveSettingsCore();
+        }
+
+        /// <summary>
+        /// 所有配置控件：值一变就延迟保存。
+        /// 不再只依赖 FormClosing —— 进程被强杀、系统关机超时、任务管理器结束进程
+        /// 都会绕过 FormClosing，导致最后一次修改丢失（"设置不会保存"的常见现场）。
+        /// </summary>
+        private void SetupAutoSave()
+        {
+            foreach (var control in EnumerateAll(this))
+            {
+                // 日志视图（RichTextBox）变化频繁且不属于配置，跳过
+                if (ReferenceEquals(control, txtLogView)) continue;
+
+                if (control is CheckBox checkBox)
+                    checkBox.CheckedChanged += (s, e) => RequestDelayedSave();
+                else if (control is RadioButton radioButton)
+                    radioButton.CheckedChanged += (s, e) => RequestDelayedSave();
+                else if (control is TextBox textBox)
+                    textBox.TextChanged += (s, e) => RequestDelayedSave();
+                else if (control is NumericUpDown numericUpDown)
+                    numericUpDown.ValueChanged += (s, e) => RequestDelayedSave();
+                else if (control is ComboBox comboBox)
+                    comboBox.SelectedIndexChanged += (s, e) => RequestDelayedSave();
+            }
+        }
+
+        /// <summary>
+        /// 显式保存并立即应用（界面上「保存设置」按钮）。
+        /// </summary>
+        private void btnSaveSettings_Click(object sender, EventArgs e)
+        {
+            if (!SaveSettings())
+            {
+                // 保存失败的原因已由 SaveSettingsCore 弹窗说明
+                return;
+            }
+
+            // 立即生效：按当前配置重建存储目标，不必等下次启动
+            try
+            {
+                _currentDestination = CreateFileDestination();
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"应用设置失败: {ex.Message}", true);
+            }
+
+            LogMessage($"设置已保存并应用：{SettingsStore.FilePath}");
+            MessageBox.Show(
+                this,
+                "设置已保存，下次启动会直接应用。\n\n配置文件：\n" + SettingsStore.FilePath,
+                "保存成功",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        private static System.Collections.Generic.IEnumerable<Control> EnumerateAll(Control root)
+        {
+            foreach (Control child in root.Controls)
+            {
+                yield return child;
+                foreach (var descendant in EnumerateAll(child))
+                    yield return descendant;
+            }
         }
 
         /// <summary>
@@ -49,18 +114,19 @@ namespace U盘文件复制
         /// <summary>
         /// 实际写盘（含失败提示：用户可见，避免「设置悄悄没保存」）
         /// </summary>
-        private void SaveSettingsCore()
+        private bool SaveSettingsCore()
         {
             try
             {
                 SettingsStore.Save(BuildAppSettings());
                 _settingsSaveErrorShown = false;
+                return true;
             }
             catch (Exception ex)
             {
                 LogMessage($"保存设置失败: {ex.Message}（配置文件：{SettingsStore.FilePath}）", true);
 
-                if (_settingsSaveErrorShown) return;
+                if (_settingsSaveErrorShown) return false;
                 _settingsSaveErrorShown = true;
                 MessageBox.Show(
                     $"设置保存失败，关闭程序后这些设置会丢失。\n\n" +
@@ -69,6 +135,7 @@ namespace U盘文件复制
                     "若程序安装在 Program Files 等受保护目录，请把程序移动到有写入权限的目录" +
                     "（如 D:\\U盘文件复制器），或以管理员身份运行。",
                     "无法保存设置", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
             }
         }
 
