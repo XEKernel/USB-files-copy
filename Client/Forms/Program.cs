@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -15,7 +16,22 @@ namespace U盘文件复制
 
         [DllImport("user32.dll")]
         private static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int maxCount);
+
+        private const int SW_SHOW = 5;
         private const int SW_RESTORE = 9;
+        private const string WindowTitlePrefix = "U盘文件复制器";
 
         private static Mutex _mutex;
 
@@ -45,32 +61,59 @@ namespace U盘文件复制
             }
         }
 
+        /// <summary>
+        /// 唤起已有实例。
+        /// 原实现用 Process.MainWindowHandle，但窗口隐藏到托盘时该值为 IntPtr.Zero，
+        /// 用户再次双击程序只会看到"已经在运行中"的弹框、窗口永远出不来，
+        /// 于是只能去任务管理器结束进程 —— 这正是最后一次设置丢失的常见原因。
+        /// 现改为枚举该进程的所有顶层窗口（含隐藏窗口）并按标题匹配。
+        /// </summary>
         private static void ActivateExistingInstance()
         {
             Process current = Process.GetCurrentProcess();
+            IntPtr handle = IntPtr.Zero;
+
             foreach (Process process in Process.GetProcessesByName(current.ProcessName))
             {
-                if (process.Id != current.Id)
-                {
-                    IntPtr handle = process.MainWindowHandle;
-                    if (handle != IntPtr.Zero)
-                    {
-                        // 恢复窗口（如果最小化）
-                        ShowWindowAsync(handle, SW_RESTORE);
-                        // 置前窗口
-                        SetForegroundWindow(handle);
-                    }
-                    break;
-                }
+                if (process.Id == current.Id) continue;
+                handle = FindMainWindow(process.Id);
+                if (handle != IntPtr.Zero) break;
             }
 
-            MessageBox.Show("程序已经在运行中", "提示",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information,
-                MessageBoxDefaultButton.Button1,
-                MessageBoxOptions.DefaultDesktopOnly);
+            if (handle != IntPtr.Zero)
+            {
+                ShowWindowAsync(handle, SW_SHOW);      // 隐藏到托盘时先显示
+                ShowWindowAsync(handle, SW_RESTORE);   // 最小化时还原
+                SetForegroundWindow(handle);
+                return;
+            }
 
+            MessageBox.Show("程序已经在运行中，但未能定位到它的窗口。\n请双击系统托盘中的图标打开。",
+                "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Environment.Exit(0);
+        }
+
+        private static IntPtr FindMainWindow(int processId)
+        {
+            IntPtr found = IntPtr.Zero;
+
+            EnumWindows((hwnd, _) =>
+            {
+                GetWindowThreadProcessId(hwnd, out uint owner);
+                if (owner != (uint)processId)
+                    return true;
+
+                var title = new StringBuilder(256);
+                GetWindowText(hwnd, title, title.Capacity);
+                if (title.ToString().StartsWith(WindowTitlePrefix, StringComparison.Ordinal))
+                {
+                    found = hwnd;
+                    return false;   // 找到即停止枚举
+                }
+                return true;
+            }, IntPtr.Zero);
+
+            return found;
         }
     }
 }

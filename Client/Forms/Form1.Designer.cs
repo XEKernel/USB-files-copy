@@ -49,6 +49,7 @@
             this.btnBrowseDir = new System.Windows.Forms.Button();
             this.label2 = new System.Windows.Forms.Label();
             this.btnHide = new System.Windows.Forms.Button();
+            this.btnSaveSettings = new System.Windows.Forms.Button();
             this.groupBox2 = new System.Windows.Forms.GroupBox();
             this.rdoReplaceNewer = new System.Windows.Forms.RadioButton();
             this.rdoKeepBoth = new System.Windows.Forms.RadioButton();
@@ -366,6 +367,17 @@
             this.label2.TabIndex = 25;
             this.label2.Text = "选择你需要复制文件的类型，\r\n并在本地选择一个目录来存\r\n储这些文件。";
             // 
+            // btnSaveSettings
+            // 
+            this.btnSaveSettings.Font = new System.Drawing.Font("微软雅黑", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
+            this.btnSaveSettings.Location = new System.Drawing.Point(210, 135);
+            this.btnSaveSettings.Name = "btnSaveSettings";
+            this.btnSaveSettings.Size = new System.Drawing.Size(108, 36);
+            this.btnSaveSettings.TabIndex = 24;
+            this.btnSaveSettings.Text = "保存设置";
+            this.btnSaveSettings.UseVisualStyleBackColor = true;
+            this.btnSaveSettings.Click += new System.EventHandler(this.btnSaveSettings_Click);
+            // 
             // btnHide
             // 
             this.btnHide.Font = new System.Drawing.Font("微软雅黑", 12F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
@@ -641,6 +653,7 @@
             this.tabPage1.Controls.Add(this.panel1);
             this.tabPage1.Controls.Add(this.txtLogView);
             this.tabPage1.Controls.Add(this.btnHide);
+            this.tabPage1.Controls.Add(this.btnSaveSettings);
             this.tabPage1.Controls.Add(this.label2);
             this.tabPage1.Controls.Add(this.btnBrowseDir);
             this.tabPage1.Controls.Add(this.label3);
@@ -1306,6 +1319,7 @@
         private System.Windows.Forms.Button btnBrowseDir;
         private System.Windows.Forms.Label label2;
         private System.Windows.Forms.Button btnHide;
+        private System.Windows.Forms.Button btnSaveSettings;
         private System.Windows.Forms.CheckBox chkAudio;
         private System.Windows.Forms.GroupBox groupBox2;
         private System.Windows.Forms.RadioButton rdoReplaceNewer;
