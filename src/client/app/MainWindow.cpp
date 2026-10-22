@@ -4,6 +4,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <winternl.h>   // RTL_OSVERSIONINFOW
 
 #include <string>
 #include <vector>
@@ -16,7 +17,7 @@ constexpr const wchar_t* kPageHostClass = L"UsbCopyPageHost";
 
 // ===== 96dpi 设计尺寸 =====
 constexpr int kDesignW = 960;
-constexpr int kDesignH = 656;
+constexpr int kDesignH = 590;
 
 constexpr int kTabX = 12;
 constexpr int kTabY = 12;
@@ -133,6 +134,48 @@ std::wstring DefaultTargetDir() {
         CoTaskMemFree(desktop);
     }
     return path;
+}
+
+// 系统版本：用 RtlGetVersion（GetVersionExW 已被标记为废弃，且可能返回兼容值）
+std::wstring OsVersionText() {
+    using RtlGetVersionFn = LONG(WINAPI*)(PRTL_OSVERSIONINFOW);
+    static auto rtlGetVersion = reinterpret_cast<RtlGetVersionFn>(
+        GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion"));
+
+    RTL_OSVERSIONINFOW info{};
+    info.dwOSVersionInfoSize = sizeof(info);
+    if (rtlGetVersion != nullptr && rtlGetVersion(&info) == 0) {
+        wchar_t buffer[64]{};
+        swprintf_s(buffer, L"Windows %lu.%lu.%lu",
+                   info.dwMajorVersion, info.dwMinorVersion, info.dwBuildNumber);
+        return buffer;
+    }
+    return L"Windows（版本未知）";
+}
+
+std::wstring CpuArchitectureText() {
+    SYSTEM_INFO info{};
+    GetNativeSystemInfo(&info);
+    switch (info.wProcessorArchitecture) {
+    case PROCESSOR_ARCHITECTURE_AMD64:
+        return L"x64";
+    case PROCESSOR_ARCHITECTURE_ARM64:
+        return L"ARM64";
+    case PROCESSOR_ARCHITECTURE_INTEL:
+        return L"x86";
+    default:
+        return L"未知";
+    }
+}
+
+std::wstring ExeDirectoryText() {
+    wchar_t path[MAX_PATH * 2]{};
+    if (GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path))) == 0) {
+        return L"（获取失败）";
+    }
+    std::wstring full = path;
+    const size_t slash = full.find_last_of(L'\\');
+    return (slash == std::wstring::npos) ? full : full.substr(0, slash);
 }
 
 } // namespace
@@ -500,73 +543,72 @@ HWND MainWindow::AddCombo(int id, const wchar_t* const* items, int count, int se
 
 void MainWindow::CreateGeneralPage() {
     // ---- 保存目录 ----
-    AddLabel(L"保存目录：", 0, 4, 60, 20);
+    AddLabel(L"保存目录：", 0, 2, 60, 20);
 #if defined(LOCAL_ONLY)
-    AddEdit(ID_TARGET_EDIT, settings_.targetDir.c_str(), 62, 2, 800, 24);
-    AddButton(L"浏览...", ID_BROWSE_TARGET, 868, 2, 60, 24);
+    AddEdit(ID_TARGET_EDIT, settings_.targetDir.c_str(), 62, 0, 800, 22);
+    AddButton(L"浏览...", ID_BROWSE_TARGET, 866, 0, 58, 22);
 #else
-    AddEdit(ID_TARGET_EDIT, settings_.targetDir.c_str(), 62, 2, 600, 24);
-    AddButton(L"浏览...", ID_BROWSE_TARGET, 668, 2, 60, 24);
-    AddRadio(L"本地", ID_SAVE_LOCAL, true, true, 748, 4, 60, 20);
-    AddRadio(L"服务器", ID_SAVE_SERVER, false, false, 820, 4, 108, 20);
+    AddEdit(ID_TARGET_EDIT, settings_.targetDir.c_str(), 62, 0, 598, 22);
+    AddButton(L"浏览...", ID_BROWSE_TARGET, 664, 0, 56, 22);
+    AddRadio(L"本地", ID_SAVE_LOCAL, true, true, 734, 2, 54, 20);
+    AddRadio(L"服务器", ID_SAVE_SERVER, false, false, 796, 2, 110, 20);
 #endif
 
     // ---- 复制文件类型 ----
-    AddGroup(L"复制文件类型", 0, 34, kPageW, 150);
+    AddGroup(L"复制文件类型", 0, 30, kPageW, 126);
     {
         const int col[4] = { 12, 232, 452, 672 };
-        AddCheck(L"文本文档", ID_TYPE_WORD, true, col[0], 56, 180, 22);
-        AddCheck(L"PPT 文件", ID_TYPE_PPT, true, col[1], 56, 180, 22);
-        AddCheck(L"表格文件", ID_TYPE_EXCEL, true, col[2], 56, 180, 22);
-        AddCheck(L"PDF 文件", ID_TYPE_PDF, true, col[3], 56, 180, 22);
+        AddCheck(L"文本文档", ID_TYPE_WORD, true, col[0], 52, 180, 22);
+        AddCheck(L"PPT 文件", ID_TYPE_PPT, true, col[1], 52, 180, 22);
+        AddCheck(L"表格文件", ID_TYPE_EXCEL, true, col[2], 52, 180, 22);
+        AddCheck(L"PDF 文件", ID_TYPE_PDF, true, col[3], 52, 180, 22);
 
-        AddCheck(L"图片文件", ID_TYPE_IMAGE, true, col[0], 84, 180, 22);
-        AddCheck(L"视频文件", ID_TYPE_VIDEO, true, col[1], 84, 180, 22);
-        AddCheck(L"音频文件", ID_TYPE_AUDIO, true, col[2], 84, 180, 22);
-        AddCheck(L"压缩包", ID_TYPE_ARCHIVE, true, col[3], 84, 180, 22);
+        AddCheck(L"图片文件", ID_TYPE_IMAGE, true, col[0], 78, 180, 22);
+        AddCheck(L"视频文件", ID_TYPE_VIDEO, true, col[1], 78, 180, 22);
+        AddCheck(L"音频文件", ID_TYPE_AUDIO, true, col[2], 78, 180, 22);
+        AddCheck(L"压缩包", ID_TYPE_ARCHIVE, true, col[3], 78, 180, 22);
 
-        AddCheck(L"所有文件 (*.*)", ID_TYPE_ALL, false, col[0], 112, 200, 22);
+        AddCheck(L"所有文件 (*.*)", ID_TYPE_ALL, false, col[0], 104, 200, 22);
 
-        AddCheck(L"自定义扩展名", ID_TYPE_CUSTOM, false, col[2], 112, 120, 22);
-        AddEdit(ID_CUSTOM_EXT_EDIT, L"", col[2] + 124, 110, 130, 24);
-        AddLabel(L"英文逗号分隔", col[2] + 262, 114, 120, 20);
+        AddCheck(L"自定义扩展名", ID_TYPE_CUSTOM, false, col[2], 104, 120, 22);
+        AddEdit(ID_CUSTOM_EXT_EDIT, L"", col[2] + 124, 102, 130, 22);
+        AddLabel(L"英文逗号分隔", col[2] + 262, 106, 120, 18);
     }
 
-    // ---- 重复文件设置 ----
-    AddGroup(L"重复文件设置", 0, 192, 452, 84);
-    AddRadio(L"跳过", ID_DUP_SKIP, true, true, 12, 216, 90, 22);
-    AddRadio(L"覆盖", ID_DUP_OVERWRITE, false, false, 112, 216, 90, 22);
-    AddRadio(L"都保留", ID_DUP_KEEP_BOTH, false, false, 212, 216, 90, 22);
-    AddRadio(L"以新换旧", ID_DUP_NEWER, false, false, 312, 216, 110, 22);
+    // ---- 重复文件设置 / 大小限制 ----
+    AddGroup(L"重复文件设置", 0, 162, 452, 72);
+    AddRadio(L"跳过", ID_DUP_SKIP, true, true, 12, 184, 84, 22);
+    AddRadio(L"覆盖", ID_DUP_OVERWRITE, false, false, 106, 184, 84, 22);
+    AddRadio(L"都保留", ID_DUP_KEEP_BOTH, false, false, 200, 184, 84, 22);
+    AddRadio(L"以新换旧", ID_DUP_NEWER, false, false, 294, 184, 110, 22);
 
-    // ---- 文件大小限制 ----
-    AddGroup(L"文件大小限制", 460, 192, 468, 84);
-    AddCheck(L"启用大小限制", ID_LIMIT_SIZE, false, 472, 214, 150, 22);
-    AddEdit(ID_MAX_SIZE_EDIT, L"100", 632, 212, 72, 24, ES_NUMBER);
-    AddLabel(L"MB", 712, 216, 40, 20);
+    AddGroup(L"文件大小限制", 460, 162, 468, 72);
+    AddCheck(L"启用大小限制", ID_LIMIT_SIZE, false, 472, 182, 150, 20);
+    AddEdit(ID_MAX_SIZE_EDIT, L"100", 630, 180, 64, 22, ES_NUMBER);
+    AddLabel(L"MB", 700, 184, 30, 18);
 
     // ---- 复制速度控制 ----
-    AddGroup(L"复制速度控制", 0, 284, 452, 84);
-    AddCheck(L"启用前 N 分钟限速（减少卡顿）", ID_LIMIT_SPEED, false, 12, 302, 300, 22);
-    AddLabel(L"N =", 12, 332, 32, 20);
-    AddEdit(ID_SPEED_MIN_EDIT, L"5", 44, 330, 56, 24, ES_NUMBER);
-    AddLabel(L"分钟", 106, 332, 40, 20);
-    AddLabel(L"速度", 160, 332, 40, 20);
-    AddCombo(ID_SPEED_COMBO, kSpeedOptions, 4, 1, 198, 326, 110, 200);
+    AddGroup(L"复制速度控制", 0, 240, 452, 72);
+    AddCheck(L"启用前 N 分钟限速（减少卡顿）", ID_LIMIT_SPEED, false, 12, 258, 300, 20);
+    AddLabel(L"N =", 12, 284, 32, 18);
+    AddEdit(ID_SPEED_MIN_EDIT, L"5", 44, 282, 50, 22, ES_NUMBER);
+    AddLabel(L"分钟", 98, 284, 36, 18);
+    AddLabel(L"速度", 140, 284, 36, 18);
+    AddCombo(ID_SPEED_COMBO, kSpeedOptions, 4, 1, 180, 278, 108, 200);
 
     // ---- 版本说明 ----
-    AddGroup(L"当前版本说明", 460, 284, 468, 84);
-    AddLabel(L"这是一次 C++/Win32 原生重写的界面预览：", 472, 302, 440, 20);
-    AddLabel(L"控件、页签、DPI、托盘已实现；复制引擎与上传尚未接入。", 472, 322, 440, 20);
+    AddGroup(L"当前版本说明", 460, 240, 468, 72);
+    AddLabel(L"C++/Win32 原生重写的界面预览：", 472, 258, 440, 18);
+    AddLabel(L"控件、页签、DPI、托盘已实现；后端尚未接入。", 472, 278, 440, 18);
 
     // ---- 日志 ----
-    AddGroup(L"运行日志", 0, 376, kPageW, 220);
+    AddGroup(L"运行日志", 0, 318, kPageW, 212);
     logEdit_ = NewControl(L"EDIT", L"",
                           WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL,
-                          ID_LOG_EDIT, 12, 400, kPageW - 24, 150, WS_EX_CLIENTEDGE);
-    counterLabel_ = AddLabel(L"本次复制：共 0 个，成功 0 个，失败 0 个", 12, 560, 420, 20);
-    AddButton(L"清空日志", ID_CLEAR_LOG, 730, 556, 84, 26);
-    AddButton(L"后台运行", ID_RUN_BACKGROUND, 824, 556, 92, 26);
+                          ID_LOG_EDIT, 12, 342, kPageW - 24, 144, WS_EX_CLIENTEDGE);
+    counterLabel_ = AddLabel(L"本次复制：共 0 个，成功 0 个，失败 0 个", 12, 494, 420, 18);
+    AddButton(L"清空日志", ID_CLEAR_LOG, 730, 490, 84, 24);
+    AddButton(L"后台运行", ID_RUN_BACKGROUND, 824, 490, 92, 24);
 }
 
 // ============================================================================
@@ -574,61 +616,60 @@ void MainWindow::CreateGeneralPage() {
 // ============================================================================
 
 void MainWindow::CreateAdvancedPage() {
-    // ---- 文件名过滤 ----
-    AddGroup(L"文件名过滤", 0, 0, 452, 104);
-    AddCheck(L"仅复制文件名含指定文字的文件", ID_FILTER_NAME, false, 12, 20, 320, 22);
-    AddLabel(L"关键词（英文逗号分隔）", 12, 46, 220, 20);
-    AddEdit(ID_NAME_KEYWORDS, L"", 12, 66, 424, 24);
+    // ---- 文件名 / 文件夹过滤 ----
+    AddGroup(L"文件名过滤", 0, 0, 452, 92);
+    AddCheck(L"仅复制文件名含指定文字的文件", ID_FILTER_NAME, false, 12, 22, 320, 20);
+    AddLabel(L"关键词（英文逗号分隔）", 12, 46, 220, 18);
+    AddEdit(ID_NAME_KEYWORDS, L"", 12, 64, 424, 22);
 
-    // ---- 文件夹过滤 ----
-    AddGroup(L"文件夹过滤", 460, 0, 468, 104);
-    AddCheck(L"仅复制路径含指定文字的文件夹", ID_FILTER_FOLDER, false, 472, 20, 340, 22);
-    AddLabel(L"关键词（英文逗号分隔）", 472, 46, 220, 20);
-    AddEdit(ID_FOLDER_KEYWORDS, L"", 472, 66, 444, 24);
+    AddGroup(L"文件夹过滤", 460, 0, 468, 92);
+    AddCheck(L"仅复制路径含指定文字的文件夹", ID_FILTER_FOLDER, false, 472, 22, 340, 20);
+    AddLabel(L"关键词（英文逗号分隔）", 472, 46, 220, 18);
+    AddEdit(ID_FOLDER_KEYWORDS, L"", 472, 64, 444, 22);
 
-    // ---- 目录结构 ----
-    AddGroup(L"目录结构", 0, 112, 452, 96);
-    AddCheck(L"创建文件树状目录", ID_CREATE_TREE, true, 12, 132, 240, 22);
-    AddCheck(L"限制复制目录深度", ID_LIMIT_DEPTH, false, 12, 156, 180, 22);
-    AddEdit(ID_DEPTH_EDIT, L"3", 200, 154, 56, 24, ES_NUMBER);
-    AddLabel(L"层", 262, 158, 24, 20);
+    // ---- 目录结构 / 日志设置 ----
+    AddGroup(L"目录结构", 0, 98, 452, 84);
+    AddCheck(L"创建文件树状目录", ID_CREATE_TREE, true, 12, 120, 240, 20);
+    AddCheck(L"限制复制目录深度", ID_LIMIT_DEPTH, false, 12, 148, 180, 20);
+    AddEdit(ID_DEPTH_EDIT, L"3", 200, 146, 50, 22, ES_NUMBER);
+    AddLabel(L"层", 256, 150, 20, 18);
 
-    // ---- 日志设置 ----
-    AddGroup(L"日志设置", 460, 112, 468, 96);
-    AddCheck(L"成功信息", ID_LOG_SUCCESS, true, 472, 132, 120, 22);
-    AddCheck(L"错误信息", ID_LOG_ERROR, true, 600, 132, 120, 22);
-    AddCheck(L"中性信息", ID_LOG_NEUTRAL, true, 728, 132, 120, 22);
-    AddCheck(L"窗口内显示", ID_LOG_TO_WINDOW, true, 472, 158, 120, 22);
-    AddCheck(L"保存为文件", ID_LOG_TO_FILE, true, 600, 158, 120, 22);
+    AddGroup(L"日志设置", 460, 98, 468, 84);
+    AddCheck(L"成功信息", ID_LOG_SUCCESS, true, 472, 120, 110, 20);
+    AddCheck(L"错误信息", ID_LOG_ERROR, true, 590, 120, 110, 20);
+    AddCheck(L"中性信息", ID_LOG_NEUTRAL, true, 708, 120, 110, 20);
+    AddCheck(L"窗口内显示", ID_LOG_TO_WINDOW, true, 472, 148, 110, 20);
+    AddCheck(L"保存为文件", ID_LOG_TO_FILE, true, 590, 148, 110, 20);
 
-    // ---- U 盘特殊文件 ----
-    AddGroup(L"U 盘特殊标记文件", 0, 216, 452, 96);
-    AddCheck(L"存在该文件时停止复制", ID_STOP_FILE, false, 12, 238, 200, 22);
-    AddEdit(ID_STOP_FILE_EDIT, L"stop.copy", 216, 236, 220, 24);
-    AddCheck(L"存在该文件时反向复制", ID_REVERSE_FILE, false, 12, 266, 200, 22);
-    AddEdit(ID_REVERSE_FILE_EDIT, L"reverse.copy", 216, 264, 220, 24);
+    // ---- U 盘标记 / 白名单 ----
+    AddGroup(L"U 盘特殊标记文件", 0, 188, 452, 88);
+    AddCheck(L"存在该文件时停止复制", ID_STOP_FILE, false, 12, 210, 200, 20);
+    AddEdit(ID_STOP_FILE_EDIT, L"stop.copy", 216, 208, 220, 22);
+    AddCheck(L"存在该文件时反向复制", ID_REVERSE_FILE, false, 12, 238, 200, 20);
+    AddEdit(ID_REVERSE_FILE_EDIT, L"reverse.copy", 216, 236, 220, 22);
 
-    // ---- 白名单 ----
-    AddGroup(L"U 盘白名单", 460, 216, 468, 96);
-    AddCheck(L"仅复制白名单中的 U 盘", ID_WHITELIST, false, 472, 238, 240, 22);
-    AddLabel(L"卷序列号，多个用英文逗号分隔", 472, 264, 300, 20);
-    AddEdit(ID_WHITELIST_EDIT, L"", 472, 282, 444, 24);
+    AddGroup(L"U 盘白名单", 460, 188, 468, 88);
+    AddCheck(L"仅复制白名单中的 U 盘", ID_WHITELIST, false, 472, 210, 240, 20);
+    AddLabel(L"卷序列号，多个用英文逗号分隔", 472, 232, 300, 18);
+    AddEdit(ID_WHITELIST_EDIT, L"", 472, 250, 444, 22);
 
-    // ---- 自启动 ----
-    AddGroup(L"开机自启动", 0, 320, 452, 88);
-    AddCheck(L"开机时自动启动本程序", ID_AUTOSTART, false, 12, 342, 260, 22);
-    AddCheck(L"启动后隐藏在托盘（按 U→S→B 唤起）", ID_AUTOSTART_HIDDEN, false, 12, 366, 320, 22);
+    // ---- 自启动 / 通知托盘 ----
+    AddGroup(L"开机自启动", 0, 282, 452, 76);
+    AddCheck(L"开机时自动启动本程序", ID_AUTOSTART, false, 12, 304, 260, 20);
+    AddCheck(L"启动后隐藏在托盘（按 U→S→B 唤起）", ID_AUTOSTART_HIDDEN, false, 12, 328, 320, 20);
 
-    // ---- 通知与托盘 ----
-    AddGroup(L"通知与托盘", 460, 320, 468, 88);
-    AddCheck(L"显示系统托盘图标", ID_TRAY_ICON, true, 472, 342, 240, 22);
-    AddCheck(L"复制完成时弹出通知", ID_NOTIFY_COMPLETE, true, 472, 366, 240, 22);
+    AddGroup(L"通知与托盘", 460, 282, 468, 76);
+    AddCheck(L"显示系统托盘图标", ID_TRAY_ICON, true, 472, 304, 240, 20);
+    AddCheck(L"复制完成时弹出通知", ID_NOTIFY_COMPLETE, true, 472, 328, 240, 20);
 
-    // ---- 说明 ----
-    AddGroup(L"说明", 0, 416, kPageW, 144);
-    AddLabel(L"• 以上选项在接入后端后生效；本版本仅验证界面布局与交互。", 12, 438, 700, 20);
-    AddLabel(L"• 键盘快捷键：U → S → B 唤起窗口，连按 5 次 ESC 退出（待接入）。", 12, 462, 700, 20);
-    AddLabel(L"• 配置持久化（原子写入 / 可写目录回退）将在 M1 公共库完成后接入。", 12, 486, 760, 20);
+    // ---- 说明（填满剩余空间，避免底部大片空白）----
+    AddGroup(L"说明", 0, 364, kPageW, 166);
+    AddLabel(L"• 以上选项在接入后端后生效；本版本仅验证界面布局与交互。", 12, 386, 760, 18);
+    AddLabel(L"• 键盘快捷键：U → S → B 唤起窗口，连按 5 次 ESC 退出（待接入）。", 12, 406, 760, 18);
+    AddLabel(L"• 配置持久化（原子写入 / 可写目录回退）将在 M1 公共库完成后接入。", 12, 426, 780, 18);
+    AddLabel(L"• 日志限 2000 行，超出后自动丢弃最早 500 行，避免长时间运行占内存。", 12, 446, 820, 18);
+    AddLabel(L"• 白名单按卷序列号匹配，可在资源管理器「属性 → 硬件」中查看。", 12, 466, 800, 18);
+    AddLabel(L"• 反向复制会把目标目录的文件写回 U 盘，请确认不会覆盖重要数据。", 12, 486, 820, 18);
 }
 
 // ============================================================================
@@ -638,41 +679,47 @@ void MainWindow::CreateAdvancedPage() {
 #if !defined(LOCAL_ONLY)
 void MainWindow::CreateServerPage() {
     // ---- 文件保存位置 ----
-    AddGroup(L"文件保存位置", 0, 0, kPageW, 76);
-    AddRadio(L"保存到本地目录", ID_SRV_LOCAL, true, true, 12, 26, 200, 22);
-    AddRadio(L"上传到服务器", ID_SRV_SERVER, false, false, 220, 26, 200, 22);
+    AddGroup(L"文件保存位置", 0, 0, kPageW, 68);
+    AddRadio(L"保存到本地目录", ID_SRV_LOCAL, true, true, 12, 24, 200, 20);
+    AddRadio(L"上传到服务器", ID_SRV_SERVER, false, false, 220, 24, 200, 20);
 
     // ---- 服务器参数 ----
-    AddGroup(L"服务器配置", 0, 84, kPageW, 210);
+    AddGroup(L"服务器配置", 0, 74, kPageW, 150);
     {
-        AddLabel(L"服务器地址", 12, 108, 90, 20);
-        AddEdit(ID_SRV_ADDRESS, L"", 110, 104, 300, 24);
-        AddLabel(L"端口", 426, 108, 44, 20);
-        AddEdit(ID_SRV_PORT, L"443", 474, 104, 90, 24, ES_NUMBER);
+        AddLabel(L"服务器地址", 12, 96, 90, 18);
+        AddEdit(ID_SRV_ADDRESS, L"", 110, 94, 300, 22);
+        AddLabel(L"端口", 426, 96, 44, 18);
+        AddEdit(ID_SRV_PORT, L"443", 474, 94, 80, 22, ES_NUMBER);
 
-        AddLabel(L"访问令牌", 12, 142, 90, 20);
-        AddEdit(ID_SRV_TOKEN, L"", 110, 138, 454, 24, ES_PASSWORD);
+        AddLabel(L"访问令牌", 12, 124, 90, 18);
+        AddEdit(ID_SRV_TOKEN, L"", 110, 122, 444, 22, ES_PASSWORD);
 
-        AddLabel(L"Basic 密码", 12, 176, 90, 20);
-        AddEdit(ID_SRV_PASSWORD, L"", 110, 172, 300, 24, ES_PASSWORD);
-        AddLabel(L"（令牌与密码二选一）", 426, 176, 200, 20);
+        AddLabel(L"Basic 密码", 12, 152, 90, 18);
+        AddEdit(ID_SRV_PASSWORD, L"", 110, 150, 300, 22, ES_PASSWORD);
+        AddLabel(L"（令牌与密码二选一）", 426, 152, 200, 18);
 
-        AddCheck(L"启用 HTTPS", ID_SRV_HTTPS, true, 12, 210, 140, 22);
-        AddCheck(L"分块上传（大文件断点续传）", ID_SRV_CHUNKED, true, 170, 210, 280, 22);
-        AddLabel(L"分块大小", 470, 214, 64, 20);
-        AddEdit(ID_SRV_CHUNK_SIZE, L"1", 538, 210, 60, 24, ES_NUMBER);
-        AddLabel(L"MB", 604, 214, 40, 20);
-
-        AddButton(L"测试连接", ID_SRV_TEST, 12, 252, 100, 28);
-        AddButton(L"浏览远程目录", ID_SRV_BROWSE, 124, 252, 120, 28);
-        serverStatus_ = AddLabel(L"状态：未测试", 260, 258, 400, 20);
+        AddCheck(L"启用 HTTPS", ID_SRV_HTTPS, true, 12, 180, 140, 20);
+        AddCheck(L"分块上传（断点续传）", ID_SRV_CHUNKED, true, 170, 180, 280, 20);
+        AddLabel(L"分块大小", 460, 182, 64, 18);
+        AddEdit(ID_SRV_CHUNK_SIZE, L"1", 528, 178, 50, 22, ES_NUMBER);
+        AddLabel(L"MB", 584, 182, 30, 18);
     }
 
+    // ---- 连接测试 ----
+    AddGroup(L"连接", 0, 230, kPageW, 80);
+    AddButton(L"测试连接", ID_SRV_TEST, 12, 252, 100, 26);
+    AddButton(L"浏览远程目录", ID_SRV_BROWSE, 124, 252, 120, 26);
+    serverStatus_ = AddLabel(L"状态：未测试", 260, 258, 400, 18);
+
     // ---- 说明 ----
-    AddGroup(L"说明", 0, 302, kPageW, 120);
-    AddLabel(L"• 上传功能尚未接入（WinHTTP 模块在 M4 实现）。", 12, 324, 700, 20);
-    AddLabel(L"• 令牌不再以明文写入仓库：服务端 appsettings 已移出版本控制。", 12, 348, 760, 20);
-    AddLabel(L"• 连接测试将访问受保护的 /api/file/stats 以验证令牌有效性。", 12, 372, 760, 20);
+    AddGroup(L"说明", 0, 316, kPageW, 214);
+    AddLabel(L"• 上传功能尚未接入（WinHTTP 模块在 M4 实现）。", 12, 338, 760, 18);
+    AddLabel(L"• 令牌不再以明文写入仓库：服务端 appsettings 已移出版本控制。", 12, 360, 820, 18);
+    AddLabel(L"• 连接测试将访问受保护的 /api/file/stats 以验证令牌有效性。", 12, 382, 820, 18);
+    AddLabel(L"• 切换「保存到本地目录」时，下方服务器参数会自动置灰。", 12, 404, 800, 18);
+    AddLabel(L"• 分块上传用于大文件断点续传：分片写入临时目录，合并后原子替换。", 12, 426, 840, 18);
+    AddLabel(L"• 协议与 v1.7.2 服务端保持一致，迁移期间可混用两版客户端。", 12, 448, 820, 18);
+    AddLabel(L"• 服务端时间统一 ISO-8601 UTC，客户端按 UTC 比较新旧文件。", 12, 470, 820, 18);
 
     // 交给统一启用/禁用逻辑（默认本地模式 → 服务器参数不可编辑）
     serverConfigCtrls_ = {
@@ -695,29 +742,48 @@ void MainWindow::CreateServerPage() {
 // ============================================================================
 
 void MainWindow::CreateAboutPage() {
-    HWND title = AddLabel(kAppTitle, 0, 8, 400, 34, SS_LEFT | SS_NOPREFIX);
+    HWND title = AddLabel(kAppTitle, 0, 4, 400, 30, SS_LEFT | SS_NOPREFIX);
     if (title != nullptr) {
         SendMessageW(title, WM_SETFONT, reinterpret_cast<WPARAM>(fontBold_), TRUE);
     }
 
     AddLabel((std::wstring(L"版本 ") + kAppVersion + L"（C++/Win32 原生实现 · 界面预览）").c_str(),
-             0, 44, 700, 22);
+             0, 38, 700, 20);
 
 #if defined(LOCAL_ONLY)
-    AddLabel(L"把 U 盘里的文件自动备份到本地目录。", 0, 76, 800, 22);
+    AddLabel(L"把 U 盘里的文件自动备份到本地目录。", 0, 64, 800, 20);
 #else
-    AddLabel(L"把 U 盘里的文件自动备份到本地目录，或上传到自建服务器。", 0, 76, 800, 22);
+    AddLabel(L"把 U 盘里的文件自动备份到本地目录，或上传到自建服务器。", 0, 64, 800, 20);
 #endif
 
-    AddButton(L"访问 GitHub 项目主页", ID_LINK_GITHUB, 0, 112, 180, 30);
-    AddButton(L"访问作者 B 站主页", ID_LINK_BILIBILI, 192, 112, 160, 30);
+    AddButton(L"访问 GitHub 项目主页", ID_LINK_GITHUB, 0, 96, 180, 28);
+    AddButton(L"访问作者 B 站主页", ID_LINK_BILIBILI, 192, 96, 160, 28);
 
-    AddGroup(L"说明", 0, 160, kPageW, 200);
-    AddLabel(L"• 本版本仅实现界面：复制、监听、上传等后端逻辑尚未接入。", 12, 182, 760, 20);
-    AddLabel(L"• 界面为纯 Win32 控件（ComCtl32 v6），无 MFC / WinForms / Qt 依赖。", 12, 206, 800, 20);
-    AddLabel(L"• 单文件发布：静态 CRT（/MT），除配置文件外不依赖任何随附 DLL。", 12, 230, 800, 20);
-    AddLabel(L"• 软件仅供学习交流，请勿用于非法用途。", 12, 254, 760, 20);
-    AddLabel(L"• 遇到问题欢迎在 GitHub 提 issue。", 12, 278, 760, 20);
+    // 左右两块填满页面，避免大块空白
+    AddGroup(L"关于本版本", 0, 140, 452, 300);
+    AddLabel(L"• 仅实现界面：复制/监听/上传尚未接入。", 12, 162, 420, 18);
+    AddLabel(L"• 纯 Win32 控件，无 MFC/WinForms/Qt。", 12, 184, 420, 18);
+    AddLabel(L"• 单文件：静态 CRT（/MT），无随附 DLL。", 12, 206, 420, 18);
+    AddLabel(L"• 高 DPI：PerMonitorV2 + 按 DPI 缩放。", 12, 228, 420, 18);
+    AddLabel(L"• 设备检测：WM_DEVICECHANGE（替代 WMI）。", 12, 250, 420, 18);
+    AddLabel(L"• 传输：WinHTTP / HTTP.sys，无第三方库。", 12, 272, 420, 18);
+    AddLabel(L"• 配置：JSON + 原子替换 + 可写目录回退。", 12, 294, 420, 18);
+    AddLabel(L"• 安全：目录边界校验、拒绝 \"..\" 与越界分块。", 12, 316, 420, 18);
+    AddLabel(L"• 仅供学习交流，请勿用于非法用途。", 12, 338, 420, 18);
+    AddLabel(L"• 问题反馈请到 GitHub 提 issue。", 12, 360, 420, 18);
+
+    AddGroup(L"环境信息", 460, 140, 468, 300);
+    const std::wstring exeDir = ExeDirectoryText();
+    AddLabel((L"系统版本：" + OsVersionText()).c_str(), 472, 162, 440, 18);
+    AddLabel((L"处理器架构：" + CpuArchitectureText()).c_str(), 472, 184, 440, 18);
+    AddLabel(L"界面框架：Win32 + ComCtl32 v6", 472, 206, 440, 18);
+    AddLabel(L"运行时：静态 CRT（无外部依赖）", 472, 228, 440, 18);
+    AddLabel(L"字符集：Unicode（UTF-16 Win32 / UTF-8 落盘）", 472, 250, 440, 18);
+    AddLabel(L"配置目录：待接入（计划 %APPDATA%\\UsbCopy）", 472, 272, 440, 18);
+    AddLabel(L"程序目录：", 472, 294, 440, 18);
+    AddLabel(exeDir.c_str(), 472, 316, 448, 18);
+    AddLabel(L"日志：待接入（计划 CopyLog.txt）", 472, 338, 440, 18);
+    AddLabel(L"构建：MSVC / 静态链接 / 单文件", 472, 360, 440, 18);
 }
 
 // ============================================================================
