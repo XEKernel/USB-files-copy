@@ -28,6 +28,9 @@ constexpr int kTabH = kDesignH - 24;
 constexpr int kPageW = kTabW - 8;
 constexpr int kPageH = kTabH - 36;
 
+// 与 C# 版 LogEngine.MaxLogLines 保持一致
+constexpr int kMaxLogLines = 900;
+
 constexpr const wchar_t* kAppTitle = L"U盘文件复制器";
 constexpr const wchar_t* kAppVersion = L"1.8.0";
 constexpr const wchar_t* kGithubUrl = L"https://github.com/XEKernel/USB-files-copy";
@@ -667,7 +670,7 @@ void MainWindow::CreateAdvancedPage() {
     AddLabel(L"• 以上选项在接入后端后生效；本版本仅验证界面布局与交互。", 12, 386, 760, 18);
     AddLabel(L"• 键盘快捷键：U → S → B 唤起窗口，连按 5 次 ESC 退出（待接入）。", 12, 406, 760, 18);
     AddLabel(L"• 配置持久化（原子写入 / 可写目录回退）将在 M1 公共库完成后接入。", 12, 426, 780, 18);
-    AddLabel(L"• 日志限 2000 行，超出后自动丢弃最早 500 行，避免长时间运行占内存。", 12, 446, 820, 18);
+    AddLabel(L"• 日志窗口保留最近 900 行（与 C# 版一致），逐行滚动丢弃最早内容。", 12, 446, 820, 18);
     AddLabel(L"• 白名单按卷序列号匹配，可在资源管理器「属性 → 硬件」中查看。", 12, 466, 800, 18);
     AddLabel(L"• 反向复制会把目标目录的文件写回 U 盘，请确认不会覆盖重要数据。", 12, 486, 820, 18);
 }
@@ -1028,13 +1031,13 @@ void MainWindow::AppendLog(const std::wstring& text, bool isError) {
     SendMessageW(logEdit_, EM_SCROLLCARET, 0, 0);
 
     ++logLines_;
-    if (logLines_ > 2000) {
-        // 超过 2000 行删除最早的 500 行，避免编辑框无限增长
-        LRESULT cut = SendMessageW(logEdit_, EM_LINEINDEX, 500, 0);
+    if (logLines_ > kMaxLogLines) {
+        // 与 C# 版一致：只丢弃最早 1 行（逐行滚动，不会一次掉一大段）
+        LRESULT cut = SendMessageW(logEdit_, EM_LINEINDEX, 1, 0);
         if (cut > 0) {
             SendMessageW(logEdit_, EM_SETSEL, 0, static_cast<LPARAM>(cut));
             SendMessageW(logEdit_, EM_REPLACESEL, FALSE, reinterpret_cast<LPARAM>(L""));
-            logLines_ -= 500;
+            --logLines_;
         }
     }
 }
