@@ -65,6 +65,23 @@ bool CallGetFullPathName(const std::wstring& input, std::wstring& output) {
     return true;
 }
 
+// ':' 只允许出现在驱动器位置（"C:" 或 "C:\..."）；其余位置是 NTFS 备用数据流（ADS），
+// 写进去会旁路文件本身（例如 file.aspx:evil 不改变 file.aspx 的可见内容）。
+bool HasMisplacedColon(const std::wstring& text) {
+    for (size_t index = 0; index < text.size(); ++index) {
+        if (text[index] != L':') {
+            continue;
+        }
+        const bool drivePosition =
+            index == 1 && std::iswalpha(text[0]) != 0 &&
+            (text.size() == 2 || IsSeparator(text[2]));
+        if (!drivePosition) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool StartsWithNoCase(const std::wstring& text, size_t offset, const wchar_t* prefix,
                       size_t length) {
     if (offset + length > text.size()) {
@@ -149,6 +166,10 @@ Status Normalize(const std::wstring& input, std::wstring& fullPath) {
         if (text.empty()) {
             return Status::Empty;
         }
+    }
+
+    if (HasMisplacedColon(text)) {
+        return Status::Invalid; // 绝对路径同样拒绝 ADS（见 HasMisplacedColon 注释）
     }
 
     std::wstring normalized;

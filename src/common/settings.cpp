@@ -22,7 +22,14 @@ namespace {
 // DPAPI 附加熵：与 C# SettingsStore.cs:92 完全一致（UTF-8 共 29 字节）
 constexpr wchar_t kEntropyText[] = L"U盘文件复制器_SALT_2024";
 
+// 完整版与单机版文件名不同：两者可能被装到同一个可写目录（或共用 %APPDATA%），
+// 若同名会互相覆盖（单机版保存时会把 server 节点、SaveLocation 重置）。
+// exe 目录下两版本来就各自一个文件夹，文件名不同也不影响任何现有迁移路径。
+#ifdef LOCAL_ONLY
+constexpr const wchar_t* kFileName = L"settings.lite.json";
+#else
 constexpr const wchar_t* kFileName = L"settings.json";
+#endif
 constexpr const wchar_t* kLegacyFileName = L"settings.xml";
 
 std::wstring KnownFolder(int csidl) {
@@ -173,21 +180,41 @@ void ApplyXmlSettings(const xml::Node& root, AppSettings& settings) {
     }
 }
 
-// 导入成功后改名：settings.xml → settings.xml.imported（重名则加时间戳）
-void RenameToImported(const std::wstring& filePath) {
-    std::wstring target = filePath + L".imported";
+// 时间戳后缀：_YYYYMMDD_HHMMSS
+std::wstring TimestampSuffix() {
+    SYSTEMTIME time{};
+    GetLocalTime(&time);
+    wchar_t buffer[32]{};
+    swprintf_s(buffer, L"_%04u%02u%02u_%02u%02u%02u", static_cast<unsigned>(time.wYear),
+               static_cast<unsigned>(time.wMonth), static_cast<unsigned>(time.wDay),
+               static_cast<unsigned>(time.wHour), static_cast<unsigned>(time.wMinute),
+               static_cast<unsigned>(time.wSecond));
+    return buffer;
+}
+
+// 把文件改名到同目录的 <原名><suffix>（重名时再拼时间戳）。
+// 用于：导入成功后 *.imported、结构损坏的 XML → *.failed、损坏的 JSON → *.corrupt。
+// 一律"改名而不是删除"，用户仍可手工找回内容。
+bool RenameToSibling(const std::wstring& filePath, const wchar_t* suffix) {
+    std::wstring target = filePath + suffix;
     if (path::FileExists(target)) {
-        SYSTEMTIME time{};
-        GetLocalTime(&time);
-        wchar_t suffix[40]{};
-        swprintf_s(suffix, L"_%04u%02u%02u_%02u%02u%02u", static_cast<unsigned>(time.wYear),
-                   static_cast<unsigned>(time.wMonth), static_cast<unsigned>(time.wDay),
-                   static_cast<unsigned>(time.wHour), static_cast<unsigned>(time.wMinute),
-                   static_cast<unsigned>(time.wSecond));
-        target = filePath + L".imported" + suffix;
+        target = filePath + suffix + TimestampSuffix();
     }
-    MoveFileExW(path::ToExtended(filePath).c_str(), path::ToExtended(target).c_str(),
-                MOVEFILE_WRITE_THROUGH);
+    const std::wstring source = path::ToExtended(filePath);
+    if (MoveFileExW(source.c_str(), path::ToExtended(target).c_str(), MOVEFILE_WRITE_THROUGH)) {
+        return true;
+    }
+    // 被占用/跨卷时退化为复制 + 删除，内容保留优先
+    if (CopyFileW(source.c_str(), path::ToExtended(target).c_str(), TRUE)) {
+        DeleteFileW(source.c_str());
+        return true;
+    }
+    return false;
+}
+
+// 导入成功后改名：settings.xml → settings.xml.imported
+void RenameToImported(const std::wstring& filePath) {
+    RenameToSibling(filePath, L".imported");
 }
 
 void ApplyLocalOnlyIfNeeded(AppSettings& settings) {
@@ -624,8 +651,7 @@ void Store::EnsureResolvedLocked() {
 std::wstring Store::ResolveFilePathLocked() {
     const std::wstring exeDirectory = path::ExeDirectory();
     const std::wstring portable = path::Combine(exeDirectory, kFileName);
-    const std::wstring roamingDirectory = RoamingDirectory();
-    const std::wstring roaming = path::Combine(roamingDirectory, kFileName);
+    const std::wstring roaming = path::Combine(RoamingDirectory(), kFileName);
 
     // ① 已存在的程序目录配置优先（便携部署，避免升级后"设置丢失"）
     if (path::FileExists(portable)) {
@@ -635,22 +661,14 @@ std::wstring Store::ResolveFilePathLocked() {
     if (path::FileExists(roaming)) {
         return roaming;
     }
-    // ③ 都没有：程序目录可写则用程序目录，否则 %APPDATA%
+    // ③ 都没有：程序目录可写则用程序目录，否则用 %APPDATA%
     if (path::IsDirectoryWritable(exeDirectory)) {
         return portable;
     }
-    if (EnsureDirectory(roamingDirectory) && path::IsDirectoryWritable(roamingDirectory)) {
-        return roaming;
-    }
-    // ④ 兜底：桌面\UsbCopy（C# 没有这一级，见基线 §15）
-    const std::wstring desktopDirectory = path::Combine(DesktopDirectory(), L"UsbCopy");
-    if (EnsureDirectory(desktopDirectory)) {
-        return path::Combine(desktopDirectory, kFileName);
-    }
-    // ⑤ 最后退到 TEMP，至少保证能存
-    const std::wstring tempDirectory = path::Combine(TempDirectory(), L"UsbCopy");
-    EnsureDirectory(tempDirectory);
-    return path::Combine(tempDirectory, kFileName);
+    // ④ 与 C# 一致：两级都不可写时**仍然返回 roaming**，让 Save 的
+    //    CreateDirectory/WriteFile 失败 → 调用方报错（C# 那里是 MessageBox）。
+    //    不做静默兜底（曾经试过退到桌面，会让用户以为保存成功了）
+    return roaming;
 }
 
 const std::wstring& Store::FilePath() {
@@ -728,8 +746,12 @@ bool Store::Load(AppSettings& settings, std::wstring* error) {
     json::Value root;
     std::wstring parseError;
     if (!json::LoadFile(filePath, root, &parseError)) {
+        // 损坏的配置改名为 *.corrupt 保留现场：否则下一次保存会把它彻底覆盖，
+        // 用户 43 个字段就永久丢了（C# 没有这一步，见基线 §15 D24）
+        const bool backedUp = RenameToSibling(filePath, L".corrupt");
         if (error != nullptr) {
-            *error = parseError;
+            *error = parseError + (backedUp ? L"（原文件已重命名为 .corrupt）"
+                                            : L"（原文件备份失败，下次保存会覆盖）");
         }
         SetDefaults(settings);
         ApplyLocalOnlyIfNeeded(settings);
@@ -737,8 +759,10 @@ bool Store::Load(AppSettings& settings, std::wstring* error) {
     }
 
     if (!FromJson(root, settings, IncludeServerNode())) {
+        const bool backedUp = RenameToSibling(filePath, L".corrupt");
         if (error != nullptr) {
-            *error = L"配置文件根节点不是 JSON 对象";
+            *error = L"配置文件根节点不是 JSON 对象" +
+                     std::wstring(backedUp ? L"（原文件已重命名为 .corrupt）" : L"");
         }
         SetDefaults(settings);
         ApplyLocalOnlyIfNeeded(settings);
@@ -821,14 +845,19 @@ bool Store::ImportLegacyXmlFrom(const std::wstring& legacyXmlPath, AppSettings& 
     xml::Node root;
     std::wstring parseError;
     if (!xml::ParseFile(legacyXmlPath, root, &parseError)) {
+        // 结构性错误不会自愈：改名 *.failed 避免每次启动都失败一遍（内容保留，可改回）
+        const bool renamed = RenameToSibling(legacyXmlPath, L".failed");
         if (error != nullptr) {
-            *error = L"解析 " + legacyXmlPath + L" 失败：" + parseError;
+            *error = L"解析 " + legacyXmlPath + L" 失败：" + parseError +
+                     (renamed ? L"（已改名为 .failed）" : L"");
         }
         return false;
     }
     if (root.name != L"AppSettings") {
+        const bool renamed = RenameToSibling(legacyXmlPath, L".failed");
         if (error != nullptr) {
-            *error = L"根元素不是 AppSettings：" + legacyXmlPath;
+            *error = L"根元素不是 AppSettings：" + legacyXmlPath +
+                     (renamed ? L"（已改名为 .failed）" : L"");
         }
         return false;
     }

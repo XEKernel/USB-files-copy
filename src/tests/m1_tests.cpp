@@ -155,6 +155,24 @@ size_t CountLines(const std::wstring& filePath) {
     return count;
 }
 
+// 目录下所有匹配文件的行数之和（用于"轮转后总量守恒"的断言）
+size_t SumLines(const std::wstring& directory, const wchar_t* pattern) {
+    WIN32_FIND_DATAW data{};
+    HANDLE handle =
+        FindFirstFileW(path::ToExtended(path::Combine(directory, pattern)).c_str(), &data);
+    if (handle == INVALID_HANDLE_VALUE) {
+        return 0;
+    }
+    size_t total = 0;
+    do {
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            total += CountLines(path::Combine(directory, data.cFileName));
+        }
+    } while (FindNextFileW(handle, &data));
+    FindClose(handle);
+    return total;
+}
+
 size_t CountMatching(const std::wstring& directory, const wchar_t* pattern) {
     WIN32_FIND_DATAW data{};
     HANDLE handle = FindFirstFileW(path::ToExtended(path::Combine(directory, pattern)).c_str(),
@@ -238,6 +256,14 @@ void TestPathUtil(const std::wstring& root) {
     CHECK(path::ResolveUnder(root, L"a*b.txt", resolved) == path::Status::Invalid);
     CHECK(path::ResolveUnder(root, L"/sub/x.txt", resolved) == path::Status::Ok);
     CHECK(path::IsUnder(root, resolved));
+
+    // --- 3b) NTFS 备用数据流（ADS）：相对与绝对路径都要拒绝 ---
+    CHECK(path::ResolveUnder(root, L"a\\b.txt:stream", resolved) == path::Status::Invalid);
+    CHECK(path::Normalize(L"C:\\data:stream", resolved) == path::Status::Invalid);
+    CHECK(path::Normalize(L"C:\\dir\\file.txt:ads", resolved) == path::Status::Invalid);
+    CHECK(path::Normalize(L"C:\\dir\\file.txt", resolved) == path::Status::Ok);
+    CHECK(path::Normalize(L"\\\\server\\share\\x", resolved) == path::Status::Ok);
+    CHECK(path::Normalize(L"C:", resolved) == path::Status::Ok); // 驱动器相对路径允许
 
     // --- 4) \\?\ 长路径前缀 ---
     CHECK_TEXT(path::ToExtended(L"C:\\a\\b"), L"\\\\?\\C:\\a\\b");
@@ -378,6 +404,14 @@ void TestJson() {
     CHECK(json::Parse(L"\"\\ud83d\\ude00\"", escapeValue, &error));
     CHECK_INT(escapeValue.AsString().size(), 2); // 代理对 → 两个 wchar_t
 
+    // 孤立代理：System.Text.Json 反序列化同样报错（本机 pwsh 实测 JsonException），
+    // 所以 C++ 一律拒绝，不做静默替换
+    json::Value loneSurrogate;
+    CHECK(!json::Parse(L"\"\\ud800\"", loneSurrogate, &error));
+    CHECK(!json::Parse(L"\"\\udc00\"", loneSurrogate, &error));
+    CHECK(!json::Parse(L"\"\\ud800x\"", loneSurrogate, &error));
+    CHECK(!json::Parse(L"\"x\\udc00\"", loneSurrogate, &error));
+
     // 数字形态
     json::Value number;
     CHECK(json::Parse(L"-1.5e2", number, &error));
@@ -498,7 +532,9 @@ settings::AppSettings MakeFeatureSettings() {
 }
 
 // 逐字段比对（43 顶层 + 11 server），任何一项不同都会打印字段名
-void CompareAllFields(const settings::AppSettings& a, const settings::AppSettings& b) {
+// compareServer=false 时跳过 server 11 项与两个被单机版强制的字段（saveLocation/useChunkedUpload）
+void CompareAllFields(const settings::AppSettings& a, const settings::AppSettings& b,
+                      bool compareServer = true) {
     CHECK_TEXT(a.targetDirectory, b.targetDirectory);
     CHECK_INT(a.copyPpt, b.copyPpt);
     CHECK_INT(a.copyWord, b.copyWord);
@@ -535,23 +571,35 @@ void CompareAllFields(const settings::AppSettings& a, const settings::AppSetting
     CHECK_INT(a.speedLimitIndex, b.speedLimitIndex);
     CHECK_INT(a.autoStart, b.autoStart);
     CHECK_INT(a.autoStartHidden, b.autoStartHidden);
-    CHECK_TEXT(a.server.serverAddress, b.server.serverAddress);
-    CHECK_INT(a.server.port, b.server.port);
-    CHECK_INT(a.server.useHttps, b.server.useHttps);
-    CHECK_TEXT(a.server.password, b.server.password);
-    CHECK_TEXT(a.server.apiToken, b.server.apiToken);
-    CHECK_TEXT(a.server.remoteRootPath, b.server.remoteRootPath);
-    CHECK_TEXT(a.server.apiBasePath, b.server.apiBasePath);
-    CHECK_INT(a.server.validateCertificate, b.server.validateCertificate);
-    CHECK_INT(a.server.timeoutSeconds, b.server.timeoutSeconds);
-    CHECK_INT(a.server.chunkSizeBytes, b.server.chunkSizeBytes);
-    CHECK_INT(a.server.maxRetries, b.server.maxRetries);
-    CHECK_INT(a.saveLocation, b.saveLocation);
-    CHECK_INT(a.useChunkedUpload, b.useChunkedUpload);
+    if (compareServer) {
+        CHECK_TEXT(a.server.serverAddress, b.server.serverAddress);
+        CHECK_INT(a.server.port, b.server.port);
+        CHECK_INT(a.server.useHttps, b.server.useHttps);
+        CHECK_TEXT(a.server.password, b.server.password);
+        CHECK_TEXT(a.server.apiToken, b.server.apiToken);
+        CHECK_TEXT(a.server.remoteRootPath, b.server.remoteRootPath);
+        CHECK_TEXT(a.server.apiBasePath, b.server.apiBasePath);
+        CHECK_INT(a.server.validateCertificate, b.server.validateCertificate);
+        CHECK_INT(a.server.timeoutSeconds, b.server.timeoutSeconds);
+        CHECK_INT(a.server.chunkSizeBytes, b.server.chunkSizeBytes);
+        CHECK_INT(a.server.maxRetries, b.server.maxRetries);
+        CHECK_INT(a.saveLocation, b.saveLocation);
+        CHECK_INT(a.useChunkedUpload, b.useChunkedUpload);
+    }
     CHECK_INT(a.showTrayIcon, b.showTrayIcon);
     CHECK_INT(a.showCompletionNotify, b.showCompletionNotify);
     CHECK_INT(a.enableWhitelist, b.enableWhitelist);
     CHECK_TEXT(a.whitelistDriveIds, b.whitelistDriveIds);
+}
+
+// 单机版构建要把 server / saveLocation / useChunkedUpload 强制成默认值，
+// 往返比对前先把期望值也按同样的规则改一遍，否则比的是"不该保留的值"
+void ApplyBuildDefaults(settings::AppSettings& settings) {
+#ifdef LOCAL_ONLY
+    settings::ApplyLocalOnlyDefaults(settings);
+#else
+    (void)settings;
+#endif
 }
 
 void TestSettingsDefaults() {
@@ -677,16 +725,44 @@ void TestSettingsPersistence(const std::wstring& root) {
     CHECK(path::FileExists(savePath));
     CHECK(!path::FileExists(savePath + L".tmp")); // 原子写不留残余
 
+    settings::AppSettings expected = features;
+    ApplyBuildDefaults(expected);
     settings::AppSettings loaded;
     CHECK(store.Load(loaded, &error));
-    CompareAllFields(features, loaded);
+    CompareAllFields(expected, loaded, settings::Store::IncludeServerNode());
+    if (!settings::Store::IncludeServerNode()) {
+        // 单机版：server 全默认 + saveLocation=0 + useChunkedUpload=false（基线 §8）
+        CHECK_INT(loaded.saveLocation, 0);
+        CHECK(!loaded.useChunkedUpload);
+        CHECK_INT(loaded.server.port, 443);
+        CHECK(loaded.server.serverAddress.empty());
+    }
+
+    // schema 元数（arity）：防止「结构体加了字段但 ToJson 忘了写」这种静默不持久化
+    const json::Value full = settings::ToJson(features, true);
+    CHECK_INT(full.Size(), 43); // 43 个顶层字段（含 server 容器）
+    const json::Value* serverNode = full.Find(L"server");
+    CHECK(serverNode != nullptr);
+    if (serverNode != nullptr) {
+        CHECK_INT(serverNode->Size(), 11);
+    }
+    // 两个 DPAPI 字段必须以密文形式出现（不是明文）
+    const std::wstring storedPassword = serverNode != nullptr ? serverNode->GetString(L"password") : L"";
+    CHECK(!storedPassword.empty());
+    CHECK(storedPassword != L"p@ss中文");
 
     // 落盘为 UTF-8 camelCase
     const std::string bytes = ReadAllBytes(savePath);
     const std::string text(bytes.begin(), bytes.end());
     CHECK(text.find("\"targetDirectory\"") != std::string::npos);
     CHECK(text.find("\"maxFileSizeMB\"") != std::string::npos);
-    CHECK(text.find("\"apiToken\"") != std::string::npos);
+    if (settings::Store::IncludeServerNode()) {
+        CHECK(text.find("\"apiToken\"") != std::string::npos);
+        CHECK(text.find("\"server\"") != std::string::npos);
+    } else {
+        CHECK(text.find("\"server\"") == std::string::npos); // 单机版不落 server 节点
+        CHECK(text.find("\"apiToken\"") == std::string::npos);
+    }
     CHECK(text.find("\"TargetDirectory\"") == std::string::npos); // 不能是 PascalCase
 
     // 覆盖保存不残留旧值（写第二次，字段值全部不同）
@@ -701,7 +777,7 @@ void TestSettingsPersistence(const std::wstring& root) {
     CHECK_INT(reloaded.maxFileSizeMb, 42);
     CHECK(reloaded.copyPpt); // 回落默认
 
-    // 损坏 JSON → 回退默认值（返回 false，不崩溃）
+    // 损坏 JSON → 回退默认值（返回 false，不崩溃），并把损坏文件改名 *.corrupt 保留现场
     const std::wstring corruptPath = path::Combine(root, L"persist\\corrupt.json");
     CHECK(WriteBytes(corruptPath, "{ this is not json "));
     store.SetFilePathForTesting(corruptPath);
@@ -711,14 +787,37 @@ void TestSettingsPersistence(const std::wstring& root) {
     CHECK(!corruptError.empty());
     CHECK_INT(corrupted.maxFileSizeMb, 100);
     CHECK(corrupted.copyPpt);
+    CHECK(!path::FileExists(corruptPath));                 // 原文件已被改名
+    CHECK(path::FileExists(corruptPath + L".corrupt"));    // 现场保留
+    CHECK_INT(static_cast<long long>(ReadAllBytes(corruptPath + L".corrupt").size()), 19);
 
-    // 空文件同样回退
+    // 空文件同样回退（空内容不是合法 JSON）
     const std::wstring emptyPath = path::Combine(root, L"persist\\empty.json");
     CHECK(WriteBytes(emptyPath, ""));
     store.SetFilePathForTesting(emptyPath);
     settings::AppSettings emptySettings = MakeFeatureSettings();
     CHECK(!store.Load(emptySettings, &corruptError));
     CHECK_INT(emptySettings.maxFileSizeMb, 100);
+    CHECK(path::FileExists(emptyPath + L".corrupt"));
+
+    // 根节点是数组（结构合法但不是对象）→ 同样回退并备份
+    const std::wstring arrayPath = path::Combine(root, L"persist\\array.json");
+    CHECK(WriteBytes(arrayPath, "[1,2,3]"));
+    store.SetFilePathForTesting(arrayPath);
+    settings::AppSettings arraySettings = MakeFeatureSettings();
+    CHECK(!store.Load(arraySettings, &corruptError));
+    CHECK_INT(arraySettings.maxFileSizeMb, 100);
+    CHECK(path::FileExists(arrayPath + L".corrupt"));
+
+    // 加载早退路径必须也放开写盘门禁（C# 靠 finally）
+    CHECK(!store.IsLoading());
+    arraySettings.maxFileSizeMb = 654;
+    std::wstring arraySaveError;
+    CHECK(store.RequestSave(arraySettings, &arraySaveError));
+    CHECK(path::FileExists(arrayPath)); // 已用默认值重新写出
+    settings::AppSettings arrayReload;
+    CHECK(store.Load(arrayReload, &arraySaveError));
+    CHECK_INT(arrayReload.maxFileSizeMb, 654);
 
     // 缺失文件 → 默认值且算成功
     store.SetFilePathForTesting(path::Combine(root, L"persist\\missing.json"));
@@ -807,13 +906,22 @@ void TestSettingsXmlImport(const std::wstring& root) {
     CHECK(!importedSettings.createDirectoryTree);
     CHECK_INT(importedSettings.speedLimitIndex, 2);
     CHECK(importedSettings.autoStartHidden);
-    CHECK_TEXT(importedSettings.server.serverAddress, L"10.0.0.5");
-    CHECK_INT(importedSettings.server.port, 9443);
-    CHECK(!importedSettings.server.useHttps);
-    CHECK_TEXT(importedSettings.server.password, L"legacy-pass"); // DPAPI 已解密
-    CHECK_TEXT(importedSettings.server.apiToken, L"legacy-token");
-    CHECK_INT(importedSettings.server.chunkSizeBytes, 1048576);
-    CHECK_INT(importedSettings.saveLocation, 1);
+    if (settings::Store::IncludeServerNode()) {
+        CHECK_TEXT(importedSettings.server.serverAddress, L"10.0.0.5");
+        CHECK_INT(importedSettings.server.port, 9443);
+        CHECK(!importedSettings.server.useHttps);
+        CHECK_TEXT(importedSettings.server.password, L"legacy-pass"); // DPAPI 已解密
+        CHECK_TEXT(importedSettings.server.apiToken, L"legacy-token");
+        CHECK_INT(importedSettings.server.chunkSizeBytes, 1048576);
+        CHECK_INT(importedSettings.saveLocation, 1);
+    } else {
+        // 单机版导入：即便 XML 里有 server，也必须被强制回落（基线 §8）
+        CHECK(importedSettings.server.serverAddress.empty());
+        CHECK_INT(importedSettings.server.port, 443);
+        CHECK(importedSettings.server.password.empty());
+        CHECK_INT(importedSettings.saveLocation, 0);
+        CHECK(!importedSettings.useChunkedUpload);
+    }
     CHECK_TEXT(importedSettings.whitelistDriveIds, L"AAAA1111");
     CHECK(importedSettings.customExtensions.empty()); // <CustomExtensions />
 
@@ -843,7 +951,10 @@ void TestSettingsXmlImport(const std::wstring& root) {
     CHECK(!badError.empty());
     CHECK(!badImported);
     CHECK(!path::FileExists(path::Combine(badDir, L"settings.json")));
-    CHECK(path::FileExists(badXml)); // 失败不删原文件
+    CHECK(!path::FileExists(badXml));                    // 已改名
+    CHECK(path::FileExists(badXml + L".failed"));        // 内容保留，可人工改回
+    CHECK_INT(static_cast<long long>(ReadAllBytes(badXml + L".failed").size()),
+              static_cast<long long>(std::string("<AppSettings><TargetDirectory>x</AppSettings>").size()));
 
     // 非 AppSettings 根元素 → 拒绝
     const std::wstring wrongRoot = path::Combine(badDir, L"wrong.xml");
@@ -853,6 +964,8 @@ void TestSettingsXmlImport(const std::wstring& root) {
     bool wrongImported = true;
     CHECK(!store.ImportLegacyXmlFrom(wrongRoot, wrongSettings, &wrongImported, &badError));
     CHECK(!wrongImported);
+    CHECK(!path::FileExists(wrongRoot));
+    CHECK(path::FileExists(wrongRoot + L".failed"));
 }
 
 void TestLocalOnly() {
@@ -888,7 +1001,7 @@ void TestLocalOnly() {
 }
 
 void TestPathResolution() {
-    Section("settings: 三段路径解析");
+    Section("settings: 两级路径解析");
 
     auto& store = settings::Store::Instance();
     store.SetFilePathForTesting(L"");
@@ -896,18 +1009,22 @@ void TestPathResolution() {
 
     const std::wstring resolved = store.FilePath();
     CHECK(!resolved.empty());
+#ifdef LOCAL_ONLY
+    // 单机版必须与完整版用不同文件名，否则同目录/同 %APPDATA% 会互相覆盖
+    CHECK_TEXT(path::FileName(resolved), L"settings.lite.json");
+#else
     CHECK_TEXT(path::FileName(resolved), L"settings.json");
+#endif
 
-    // 必须落在三级候选之一：exe 目录 / %APPDATA%\UsbCopy / 桌面\UsbCopy
+    // 必须落在两级候选之一：exe 目录 / %APPDATA%\UsbCopy
+    // （与 C# ResolveFilePath 一致；不做桌面兜底，见基线 §15 D18）
     const std::wstring exeDir = path::ExeDirectory();
     const std::wstring roaming = settings::RoamingDirectory();
-    const std::wstring desktop = path::Combine(settings::DesktopDirectory(), L"UsbCopy");
     const bool inExe = path::IsUnder(exeDir, resolved);
     const bool inRoaming = path::IsUnder(roaming, resolved);
-    const bool inDesktop = path::IsUnder(desktop, resolved);
-    CHECK(inExe || inRoaming || inDesktop);
+    CHECK(inExe || inRoaming);
     if (!inExe) {
-        SKIP("本机 exe 目录不可写，配置已回退到 APPDATA/桌面（正是三级解析的兜底路径）");
+        SKIP("本机 exe 目录不可写，配置已回退到 APPDATA（正是两级解析的兜底路径）");
     }
 
     // 目录缓存与文件一致
@@ -1055,6 +1172,13 @@ void TestLog(const std::wstring& root) {
     CHECK(lines.front().find(L"line 50") != std::wstring::npos);
     CHECK(lines.back().find(L"line 949") != std::wstring::npos);
 
+    // 再写一条：最老的 line 50 消失、line 51 成为队首（证明保留"最新"900 行）
+    engine.Write(L"line 950");
+    const std::vector<std::wstring> afterOne = engine.WindowLines();
+    CHECK_INT(afterOne.size(), 900);
+    CHECK(afterOne.front().find(L"line 51") != std::wstring::npos);
+    CHECK(afterOne.back().find(L"line 950") != std::wstring::npos);
+
     // --- 轮转：小阈值（验证逻辑）---
     const std::wstring rotateDir = path::Combine(root, L"rotate");
     CHECK(settings::EnsureDirectory(rotateDir));
@@ -1104,6 +1228,32 @@ void TestLog(const std::wstring& root) {
     }
     CHECK_INT(engine.WindowLineCount(), 900);
     CHECK_INT(CountLines(mtPath), 2000); // 文件不丢行（5MB 内不轮转）
+
+    // --- 边写边轮转（并发）：轮转与追加在同一把锁里，要求"总量守恒"而不是丢行 ---
+    const std::wstring racePath = path::Combine(rotateDir, L"Race.txt");
+    log::Options race;
+    race.filePath = racePath;
+    race.maxWindowLines = 900;
+    race.maxFileSizeBytes = 2048; // 极小阈值，频繁触发轮转
+    engine.Configure(race);
+    engine.ClearWindow();
+
+    std::vector<std::thread> racers;
+    racers.reserve(2);
+    for (int t = 0; t < 2; ++t) {
+        racers.emplace_back([&engine, t]() {
+            for (int i = 0; i < 400; ++i) {
+                engine.Write(L"race-" + std::to_wstring(t) + L"-" + std::to_wstring(i));
+            }
+        });
+    }
+    for (std::thread& thread : racers) {
+        thread.join();
+    }
+    const size_t raceCurrent = CountLines(racePath);
+    const size_t raceRotated = SumLines(rotateDir, L"Race_*.txt");
+    CHECK_INT(raceCurrent + raceRotated, 800); // 一条都没丢
+    CHECK(raceRotated > 0);                    // 确实发生过轮转
 
     // --- 关闭开关后不写文件/不入窗口 ---
     log::Options off;

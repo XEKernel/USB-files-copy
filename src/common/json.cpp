@@ -361,10 +361,14 @@ private:
                         }
                         pos_ = save;
                     }
-                    out.push_back(static_cast<wchar_t>(code)); // 孤立代理，原样保留
-                } else {
-                    out.push_back(static_cast<wchar_t>(code));
+                    // 孤立高代理：System.Text.Json 反序列化时同样报错（本机 pwsh 实测
+                    // "\ud800" / "\ud800x" 均抛 JsonException），因此这里拒绝而不是静默保留
+                    return Fail(error, L"\\u 转义含孤立的高位代理（与 System.Text.Json 一致视为非法）");
                 }
+                if (code >= 0xDC00 && code <= 0xDFFF) {
+                    return Fail(error, L"\\u 转义含孤立的低位代理（与 System.Text.Json 一致视为非法）");
+                }
+                out.push_back(static_cast<wchar_t>(code));
                 break;
             }
             default:

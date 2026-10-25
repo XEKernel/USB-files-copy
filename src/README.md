@@ -17,9 +17,16 @@
 .\build.ps1                 # 完整版    → out\bin\release\UsbCopy.exe
 .\build.ps1 -Lite           # 单机版    → out\bin\release-lite\UsbCopyLite.exe
 .\build.ps1 -Config debug   # 调试版（/Od /Zi + PDB）
-.\build.ps1 -Tests          # M1 测试   → out\bin\release-tests\m1_tests.exe（407 项检查）
+.\build.ps1 -Tests          # M1 测试   → out\bin\release-tests\m1_tests.exe（445 项）
+.\build.ps1 -Tests -Lite    # 单机版测试 → out\bin\release-tests-lite\（434 项，验 server 裁剪）
 .\build.ps1 -Tests -Run     # 构建并直接跑测试
 .\build.ps1 -Lite -Run      # 构建并启动
+```
+
+测试程序支持只读探针模式（跨语言比对用）：
+
+```powershell
+.\out\bin\release-tests\m1_tests.exe --import-xml <settings.xml>   # 导入并打印全部字段
 ```
 
 编译选项固定为 `/std:c++20 /permissive- /W4 /WX /utf-8 /EHsc /MT /GR-`：
@@ -55,8 +62,12 @@ src/
       app.manifest       ComCtl v6 / PerMonitorV2 / longPathAware / asInvoker
       icon.ico
   tests/
-    m1_tests.cpp          M1 验收测试（控制台，退出码 0 = 全绿）
+    m1_tests.cpp          M1 验收测试（控制台，退出码 0 = 全绿；`--import-xml` 为探针模式）
 build.ps1                 编译 + 资源 + 链接（不依赖 CMake / nmake）
+tools/
+  interop/
+    verify_dpapi_settings.py  跨语言验证：Python 独立 DPAPI → C# 真实加解密 → C++ 导入
+    README.md                 为什么它必须入库、怎么跑、退出码含义
 ```
 
 ## 关键实现说明
@@ -71,10 +82,15 @@ build.ps1                 编译 + 资源 + 链接（不依赖 CMake / nmake）
 - **单文件**：`/MT` 静态 CRT；图标/清单/版本信息编译进 exe；运行只依赖系统 DLL。
 - **固定窗口尺寸**：960×590 客户区（`WM_GETMINMAXINFO` 锁定），避免控件在缩放时错位；
   日志区自带滚动条。
-- **配置路径**：exe 目录 → `%APPDATA%\UsbCopy` → 桌面 `UsbCopy` → `%TEMP%`（逐级兜底）；
-  已存在的文件优先，避免升级后"设置丢失"。
+- **配置路径**：与 C# 一样两级 —— 已存在的 `exe\settings.json` → 已存在的
+  `%APPDATA%\UsbCopy\settings.json` → exe 目录可写则用 exe 目录 → 否则用 `%APPDATA%`
+  （两级都不可写时**保存会失败并报错**，不静默兜底）。
+  单机版用 `settings.lite.json`，与完整版**永不共享**配置文件（避免单机版重置掉服务器配置）。
+- **损坏配置**：解析失败时先把文件改名 `settings.json.corrupt`（重名加时间戳）再回退默认值，
+  避免下一次保存把用户 43 个字段永久覆盖。
 - **DPAPI**：`CryptProtectData(CurrentUser)` + 固定 entropy（`U盘文件复制器_SALT_2024` 的 UTF-8，
   29 字节），密文以 **Base64** 存盘，与 C# 版可互相解密。
+  改这块后必须跑 `tools\interop\verify_dpapi_settings.py`（让 C# 版真实参与一次加解密）。
 
 ## 尚未接入（后续里程碑）
 

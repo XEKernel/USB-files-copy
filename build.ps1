@@ -29,7 +29,7 @@ if (-not (Test-Path $envScript)) {
 . $envScript
 
 # ---- 输出目录 ----
-$suffix = if ($Tests) { '-tests' } elseif ($Lite) { '-lite' } else { '' }
+$suffix = if ($Tests -and $Lite) { '-tests-lite' } elseif ($Tests) { '-tests' } elseif ($Lite) { '-lite' } else { '' }
 $objDir = Join-Path $root "out\obj\$Config$suffix"
 $binDir = Join-Path $root "out\bin\$Config$suffix"
 New-Item -ItemType Directory -Force -Path $objDir, $binDir | Out-Null

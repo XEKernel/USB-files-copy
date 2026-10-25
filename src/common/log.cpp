@@ -152,22 +152,23 @@ void Engine::RotateIfNeededLocked() {
                static_cast<unsigned>(time.wSecond));
 
     const std::wstring directory = path::DirectoryName(options_.filePath);
-    const std::wstring stem = path::FileNameWithoutExtension(options_.filePath) + suffix +
-                              path::Extension(options_.filePath);
-    std::wstring rotated = path::Combine(directory, stem);
+    const std::wstring ext = path::Extension(options_.filePath);
+    const std::wstring stem = path::FileNameWithoutExtension(options_.filePath) + suffix;
+    std::wstring rotated = path::Combine(directory, stem + ext);
 
     const std::wstring source = path::ToExtended(options_.filePath);
     if (MoveFileExW(source.c_str(), path::ToExtended(rotated).c_str(), MOVEFILE_WRITE_THROUGH)) {
         return;
     }
 
-    // 同一秒内重复轮转：加序号（C# 会直接失败并放弃轮转，这里做得更好一点）
+    // 同一秒内重复轮转：序号插在扩展名之前（CopyLog_20261025_101500_1.txt），
+    // 这样 CopyLog_*.txt 这类通配符仍能一次匹配到全部归档
+    // （C# 在同秒重复轮转时会失败并放弃轮转，导致文件无限增长）
     for (int index = 1; index <= 99; ++index) {
         wchar_t numbered[16]{};
         swprintf_s(numbered, L"_%d", index);
         const std::wstring candidate = path::Combine(
-            directory, path::FileNameWithoutExtension(options_.filePath) + suffix +
-                           path::Extension(options_.filePath) + numbered);
+            directory, stem + numbered + ext);
         if (MoveFileExW(source.c_str(), path::ToExtended(candidate).c_str(),
                         MOVEFILE_WRITE_THROUGH)) {
             return;

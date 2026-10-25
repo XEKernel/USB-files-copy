@@ -130,7 +130,9 @@ class Store {
 public:
     static Store& Instance();
 
-    // 三级路径解析（结果缓存）：exe 目录 → %APPDATA%\UsbCopy → 桌面\UsbCopy
+    // 两级路径解析（结果缓存，与 C# SettingsStore.ResolveFilePath 一致）：
+    //   已存在的 exe\settings[.lite].json → 已存在的 %APPDATA%\UsbCopy\... →
+    //   exe 目录可写则用 exe 目录 → 否则用 %APPDATA%（不可写时 Save 直接失败并报错）
     const std::wstring& FilePath();
     const std::wstring& Directory();
 
@@ -187,7 +189,7 @@ bool WriteFileAtomic(const std::wstring& filePath, const std::string& bytes, std
 std::wstring RoamingDirectory();
 // C# 版遗留目录 %APPDATA%\U盘文件复制器（仅用于导入）
 std::wstring LegacyRoamingDirectory();
-// 桌面目录
+// 桌面目录（配置解析**不再**用它；留给 M3 的日志/导出等界面功能）
 std::wstring DesktopDirectory();
 
 } // namespace usbcopy::settings
