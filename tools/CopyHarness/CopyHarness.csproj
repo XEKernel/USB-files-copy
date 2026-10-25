@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- ========================================================================
+       CopyHarness：C# 版 CopyEngine 的 headless 运行器（M2 对照基准）
+
+       为什么是"链接源码"而不是引用产品 exe：
+         产品是 WinExe + 老式 csproj，引用时会连带 WinForms；而验收只需要
+         CopyEngine 的目录复制内核。链接同一份源文件后，编进本程序集的
+         CopyEngine 与产品用的完全相同，产品代码零改动、也不会漂移。
+
+       为什么是老式 csproj：
+         本机 NuGet 的 fallback 目录（D:\Visual Studio tools\NuGetPackages）
+         不存在，SDK 式项目在 ResolvePackageAssets 阶段直接 MSB4018。
+         老式 csproj + HintPath 完全不走 NuGet，和产品项目同一套构建路径。
+       ======================================================================== -->
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{B7F1C3A2-5D6E-4F80-9A11-2C3D4E5F6071}</ProjectGuid>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>UsbCopy.Harness</RootNamespace>
+    <AssemblyName>CopyHarness</AssemblyName>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <Deterministic>true</Deterministic>
+    <LangVersion>7.3</LangVersion>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <Prefer32Bit>false</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <IntermediateOutputPath>obj\Debug\</IntermediateOutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <IntermediateOutputPath>obj\Release\</IntermediateOutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Management" />
+    <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
+      <HintPath>..\..\Client\packages\Newtonsoft.Json.13.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <!-- 产品源码：同一份文件，仅链接，不复制、不改动 -->
+    <Compile Include="..\..\Client\Core\CopyEngine.cs">
+      <Link>Linked\CopyEngine.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Client\Core\CopyOptions.cs">
+      <Link>Linked\CopyOptions.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Client\Core\FileCategories.cs">
+      <Link>Linked\FileCategories.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Client\Core\FileHasher.cs">
+      <Link>Linked\FileHasher.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Client\Storage\IFileDestination.cs">
+      <Link>Linked\IFileDestination.cs</Link>
+    </Compile>
+    <Compile Include="..\..\Client\Storage\LocalFileDestination.cs">
+      <Link>Linked\LocalFileDestination.cs</Link>
+    </Compile>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+</Project>
