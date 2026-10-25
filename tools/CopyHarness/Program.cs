@@ -302,6 +302,25 @@ namespace UsbCopy.Harness
                     "CopyEngine.CopyDirectoryAsync 不存在 —— 产品改过方法签名？请同步更新 harness");
             }
 
+            // 签名断言：产品若在灰度期重构（改名/加参数），这里要**立刻报错退出**，
+            // 而不是等到 Invoke 才抛 TargetParameterCountException/NullReference
+            ParameterInfo[] parameters = method.GetParameters();
+            bool signatureOk = method.ReturnType == typeof(Task) && parameters.Length == 7 &&
+                               parameters[0].ParameterType == typeof(DirectoryInfo) &&
+                               parameters[1].ParameterType == typeof(string) &&
+                               parameters[2].ParameterType == typeof(CopyOptions) &&
+                               parameters[3].ParameterType == typeof(IFileDestination) &&
+                               parameters[4].ParameterType == typeof(bool) &&
+                               parameters[5].ParameterType == typeof(int) &&
+                               parameters[6].ParameterType == typeof(CancellationToken);
+            if (!signatureOk)
+            {
+                throw new MissingMethodException(
+                    "CopyDirectoryAsync 签名已变化，期望 " +
+                    "Task (DirectoryInfo, string, CopyOptions, IFileDestination, bool, int, CancellationToken)，" +
+                    "实际参数个数 = " + parameters.Length + "。请同步更新 tools/CopyHarness/Program.cs");
+            }
+
             string relativeTargetDir = options.Reverse ? "" : options.FolderName;
             object[] arguments =
             {

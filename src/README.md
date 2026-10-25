@@ -68,7 +68,12 @@ tools/
   interop/
     verify_dpapi_settings.py  跨语言验证：Python 独立 DPAPI → C# 真实加解密 → C++ 导入
     README.md                 为什么它必须入库、怎么跑、退出码含义
+  CopyHarness/                C# CopyEngine 的 headless 运行器（M2 验收基准）
 ```
+
+> `tools/` 下的 Python 脚本是**开发期工具**，不参与构建、不进发行包。
+> 「不引入第三方文件」这条约束针对**运行时/部署**（单 exe、无随附 DLL、无第三方库），
+> 不限制开发工具。
 
 ## 关键实现说明
 

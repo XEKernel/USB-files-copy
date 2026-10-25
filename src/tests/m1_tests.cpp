@@ -13,6 +13,8 @@
 #include <thread>
 #include <vector>
 
+#include "copy_callbacks.h"
+#include "file_filter.h"
 #include "json.h"
 #include "log.h"
 #include "path_util.h"
@@ -1270,6 +1272,198 @@ void TestLog(const std::wstring& root) {
     engine.Configure(log::Options());
 }
 
+// ---------------------------------------------------------------------------
+//  5. file_filter（M2 第一段）
+// ---------------------------------------------------------------------------
+
+void TestFileFilter(const std::wstring& root) {
+    Section("file_filter: 模式 / 属性 / 关键词 / 大小 / 深度");
+
+    const std::wstring dir = path::Combine(root, L"filter");
+    CHECK(settings::EnsureDirectory(dir));
+    CHECK(WriteBytes(path::Combine(dir, L"a.txt"), "x"));
+    CHECK(WriteBytes(path::Combine(dir, L"b.PDF"), "x"));
+    CHECK(WriteBytes(path::Combine(dir, L"noext"), "x"));
+    CHECK(WriteBytes(path::Combine(dir, L"中文.txt"), "x"));
+    CHECK(WriteBytes(path::Combine(dir, L"tricky.docx"), "x"));
+
+    // 模式匹配走 OS，语义与 C# Directory.EnumerateFiles 一致
+    CHECK(copy::MatchesAnyPattern(dir, L"a.txt", {L"*.*"}));
+    CHECK(copy::MatchesAnyPattern(dir, L"noext", {L"*.*"})); // *.* 也匹配无扩展名
+    CHECK(copy::MatchesAnyPattern(dir, L"a.txt", {L"*.txt"}));
+    CHECK(copy::MatchesAnyPattern(dir, L"b.PDF", {L"*.pdf"})); // 不区分大小写
+    CHECK(!copy::MatchesAnyPattern(dir, L"a.txt", {L"*.pdf"}));
+    CHECK(copy::MatchesAnyPattern(dir, L"中文.txt", {L"*.txt"}));
+    CHECK(copy::MatchesAnyPattern(dir, L"a.txt", {L"*.pdf", L"*.txt"})); // 多模式并集
+
+    const bool docQuirk = copy::MatchesAnyPattern(dir, L"tricky.docx", {L"*.doc"});
+    std::printf("    [probe] *.doc 是否匹配 tricky.docx = %s（Windows 8.3 短名行为）\n",
+                docQuirk ? "yes" : "no");
+
+    // CollectMatchedNames 去重且保序
+    const std::vector<std::wstring> matched =
+        copy::CollectMatchedNames(dir, {L"*.txt", L"*.*"});
+    CHECK(matched.size() >= 5); // *.* 覆盖全部 5 个
+
+    copy::CopyOptions options;
+
+    // 属性
+    const std::wstring hiddenPath = path::Combine(dir, L"hidden.txt");
+    CHECK(WriteBytes(hiddenPath, "x"));
+    SetFileAttributesW(path::ToExtended(hiddenPath).c_str(), FILE_ATTRIBUTE_HIDDEN);
+    const auto hiddenEval =
+        copy::EvaluateFile(hiddenPath, L"hidden.txt", 1, FILE_ATTRIBUTE_HIDDEN, options, false);
+    CHECK(hiddenEval.decision.kind == copy::DecisionKind::Skip);
+    CHECK_TEXT(hiddenEval.decision.reason, L"hidden-attr");
+    CHECK(!hiddenEval.countedAsFailure);
+
+    // 顺序：名字先于属性（desktop.ini 即使是隐藏+系统，也报 system-file）
+    const auto desktopIni = copy::EvaluateFile(L"", L"desktop.ini", 1,
+                                               FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM,
+                                               options, false);
+    CHECK_TEXT(desktopIni.decision.reason, L"system-file");
+
+    // 标记文件：正向 copy.stop，反向 .reverse_copied（不区分大小写）
+    CHECK_TEXT(copy::EvaluateFile(L"", L"COPY.STOP", 1, 0, options, false).decision.reason,
+               L"marker-file");
+    CHECK(copy::EvaluateFile(L"", L".reverse_copied", 1, 0, options, false).decision.kind ==
+          copy::DecisionKind::Copy);
+    CHECK_TEXT(copy::EvaluateFile(L"", L".REVERSE_COPIED", 1, 0, options, true).decision.reason,
+               L"marker-file");
+
+    // reparse point 优先于属性（D27）
+    CHECK_TEXT(copy::EvaluateFile(L"", L"x.txt", 1,
+                                  FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_HIDDEN, options,
+                                  false)
+                   .decision.reason,
+               L"reparse-point");
+
+    // 目录判定
+    CHECK_TEXT(copy::EvaluateDirectory(L"System Volume Information", 0).reason, L"system-dir");
+    CHECK_TEXT(copy::EvaluateDirectory(L"$RECYCLE.BIN", 0).reason, L"system-dir");
+    CHECK_TEXT(copy::EvaluateDirectory(L".Trashes", 0).reason, L"system-dir");
+    CHECK_TEXT(copy::EvaluateDirectory(L"normal", FILE_ATTRIBUTE_HIDDEN).reason, L"attr-dir");
+    CHECK(copy::EvaluateDirectory(L"normal", 0).kind == copy::DecisionKind::Copy);
+    CHECK_TEXT(copy::EvaluateDirectory(L"link", FILE_ATTRIBUTE_REPARSE_POINT).reason,
+               L"reparse-point");
+
+    // 文件名关键词：忽略大小写、包含即可、启用但空 → 一个都不匹配
+    copy::CopyOptions nameFilter;
+    nameFilter.filterByFileName = true;
+    nameFilter.fileNameKeywords = {L"报告", L"REPORT"};
+    CHECK(copy::PassFileNameFilter(L"年度报告.docx", nameFilter));
+    CHECK(copy::PassFileNameFilter(L"report.txt", nameFilter));
+    CHECK(!copy::PassFileNameFilter(L"other.txt", nameFilter));
+    nameFilter.fileNameKeywords.clear();
+    CHECK(!copy::PassFileNameFilter(L"any.txt", nameFilter));
+    nameFilter.filterByFileName = false;
+    CHECK(copy::PassFileNameFilter(L"any.txt", nameFilter)); // 未启用 → 全通过
+
+    // 大小限制：严格大于
+    copy::CopyOptions sizeOptions;
+    sizeOptions.enableSizeLimit = true;
+    sizeOptions.maxSizeBytes = 100;
+    CHECK(!copy::ExceedsSizeLimit(100, sizeOptions));
+    CHECK(copy::ExceedsSizeLimit(101, sizeOptions));
+    const auto bigEval = copy::EvaluateFile(L"", L"big.bin", 101, 0, sizeOptions, false);
+    CHECK_TEXT(bigEval.decision.reason, L"size-limit");
+    CHECK(bigEval.countedAsFailure); // 唯一"跳过但计失败"的例外
+
+    // 深度：currentDepth >= max 时不再下降
+    copy::CopyOptions depth;
+    depth.limitDirectoryDepth = true;
+    depth.maxDirectoryDepth = 0;
+    CHECK(copy::DepthExceeded(0, depth));
+    depth.maxDirectoryDepth = 3;
+    CHECK(!copy::DepthExceeded(2, depth));
+    CHECK(copy::DepthExceeded(3, depth));
+    depth.limitDirectoryDepth = false;
+    CHECK(!copy::DepthExceeded(99, depth)); // 未启用 → 无限
+
+    // 关键词解析：逗号切分、trim、忽略大小写去重
+    const std::vector<std::wstring> keywords = copy::ParseKeywords(L" a , A ,b,,  c  ");
+    CHECK_INT(keywords.size(), 3);
+    CHECK_TEXT(keywords[0], L"a");
+    CHECK_TEXT(keywords[1], L"b");
+    CHECK_TEXT(keywords[2], L"c");
+    CHECK_INT(copy::ParseKeywords(L"").size(), 0);
+}
+
+// ---------------------------------------------------------------------------
+//  6. counters（D30 裁决后的语义）
+// ---------------------------------------------------------------------------
+
+void TestCounters() {
+    Section("counters: 每个最终决策后立即上报（D30）");
+
+    struct Recorder {
+        int notifyCount = 0;
+        int decisionCount = 0;
+        int lastTotal = -1;
+        int lastSuccess = -1;
+        int lastFailure = -1;
+        copy::DecisionKind lastKind = copy::DecisionKind::Copy;
+        std::wstring lastReason;
+    } recorder;
+
+    copy::CopyCallbacks callbacks;
+    callbacks.onCounts = [&recorder](int total, int success, int failure) {
+        ++recorder.notifyCount;
+        recorder.lastTotal = total;
+        recorder.lastSuccess = success;
+        recorder.lastFailure = failure;
+    };
+    callbacks.onDecision = [&recorder](const std::wstring&, copy::DecisionKind kind,
+                                       const wchar_t* reason) {
+        ++recorder.decisionCount;
+        recorder.lastKind = kind;
+        recorder.lastReason = reason == nullptr ? L"" : reason;
+    };
+
+    copy::Counters counters(&callbacks);
+    counters.Reset();
+    CHECK_INT(recorder.notifyCount, 1); // Reset 也通知（C# 亦然）
+
+    counters.Copy(L"a.txt");
+    CHECK_INT(counters.total(), 1);
+    CHECK_INT(counters.success(), 1);
+    CHECK_INT(counters.failure(), 0);
+    CHECK_INT(recorder.notifyCount, 2);
+
+    // 普通跳过：不改计数、不通知，但要发决策
+    counters.Skip(L"hidden.txt", copy::reason::kHiddenAttr);
+    CHECK_INT(counters.total(), 1);
+    CHECK_INT(recorder.notifyCount, 2);
+    CHECK_INT(recorder.decisionCount, 2);
+    CHECK(recorder.lastKind == copy::DecisionKind::Skip);
+    CHECK_TEXT(recorder.lastReason, L"hidden-attr");
+
+    // 超大文件：决策 Skip，但计 total+failure，且通知
+    counters.Skip(L"big.bin", copy::reason::kSizeLimit, true);
+    CHECK_INT(counters.total(), 2);
+    CHECK_INT(counters.failure(), 1);
+    CHECK_INT(recorder.notifyCount, 3);
+
+    // 失败：立即通知（C# 在硬错误/取消路径上不通知 —— D30 的修复点）
+    counters.Fail(L"locked.txt", copy::reason::kCopyError);
+    CHECK_INT(counters.total(), 3);
+    CHECK_INT(counters.failure(), 2);
+    CHECK_INT(recorder.notifyCount, 4);
+    CHECK_INT(recorder.decisionCount, 4);
+    CHECK(recorder.lastKind == copy::DecisionKind::Fail);
+
+    // 通知里的数字必须与 getter 一致
+    CHECK_INT(recorder.lastTotal, counters.total());
+    CHECK_INT(recorder.lastSuccess, counters.success());
+    CHECK_INT(recorder.lastFailure, counters.failure());
+
+    counters.Reset();
+    CHECK_INT(counters.total(), 0);
+    CHECK_INT(counters.success(), 0);
+    CHECK_INT(counters.failure(), 0);
+    CHECK_INT(recorder.notifyCount, 5);
+}
+
 } // namespace
 
 // 探针模式：m1_tests.exe --import-xml <settings.xml>
@@ -1372,6 +1566,8 @@ int wmain(int argc, wchar_t** argv) {
     TestLocalOnly();
     TestPathResolution();
     TestXmlLite();
+    TestFileFilter(root);
+    TestCounters();
     TestLog(root);
 
     RemoveTree(root);

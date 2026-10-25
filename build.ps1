@@ -54,7 +54,9 @@ $commonSources = @(
     'src\common\json.cpp',
     'src\common\xml_lite.cpp',
     'src\common\settings.cpp',
-    'src\common\log.cpp'
+    'src\common\log.cpp',
+    'src\common\file_filter.cpp',
+    'src\common\copy_callbacks.cpp'
 )
 
 if ($Tests) {
