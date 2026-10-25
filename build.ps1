@@ -56,6 +56,7 @@ $commonSources = @(
     'src\common\settings.cpp',
     'src\common\log.cpp',
     'src\common\file_filter.cpp',
+    'src\common\name_util.cpp',
     'src\common\copy_callbacks.cpp'
 )
 

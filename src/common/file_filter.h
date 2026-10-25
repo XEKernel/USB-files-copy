@@ -37,6 +37,26 @@ struct FileEvaluation {
     bool countedAsFailure = false;
 };
 
+// ---- 盘级标记（**不属于单文件判定**，务必在引擎入口调用一次）----
+//
+// C# 把两件事分在两个层次，混在一起会算错 skipReason：
+//   ① 盘级 `CopyEngine.ContainsSpecialFile`（CopyEngine.cs:112-140）
+//      → `stop.copy` 存在 = 整个盘不复制；`reverse.copy` 存在 = 走反向复制
+//   ② 文件级 `CopyEngine.ShouldSkipFile`（CopyEngine.cs:569-581）
+//      → 把标记文件**自身**跳过，别把它复制进去
+// 本工程的 `EvaluateFileBasics` 只做 ②；① 是这个函数。
+//
+// 优先级：`stop.copy` **先于** `reverse.copy`（C# 顺序，两个都在时停复制）。
+enum class DriveAction {
+    None,
+    StopCopy,
+    ReverseCopy,
+};
+
+// markerPath 返回命中的标记文件完整路径（可为 nullptr）
+DriveAction DetectDriveAction(const std::wstring& driveRoot, const CopyOptions& options,
+                              std::wstring* markerPath);
+
 // 单个文件的完整判定（含文件名关键词与大小限制）
 FileEvaluation EvaluateFile(const std::wstring& fullPath, const std::wstring& fileName,
                             long long length, DWORD attributes, const CopyOptions& options,

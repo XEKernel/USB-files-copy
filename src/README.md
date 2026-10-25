@@ -17,8 +17,8 @@
 .\build.ps1                 # 完整版    → out\bin\release\UsbCopy.exe
 .\build.ps1 -Lite           # 单机版    → out\bin\release-lite\UsbCopyLite.exe
 .\build.ps1 -Config debug   # 调试版（/Od /Zi + PDB）
-.\build.ps1 -Tests          # M1 测试   → out\bin\release-tests\m1_tests.exe（445 项）
-.\build.ps1 -Tests -Lite    # 单机版测试 → out\bin\release-tests-lite\（434 项，验 server 裁剪）
+.\build.ps1 -Tests          # M1 测试   → out\bin\release-tests\m1_tests.exe（560 项）
+.\build.ps1 -Tests -Lite    # 单机版测试 → out\bin\release-tests-lite\（549 项，验 server 裁剪）
 .\build.ps1 -Tests -Run     # 构建并直接跑测试
 .\build.ps1 -Lite -Run      # 构建并启动
 ```
@@ -52,6 +52,10 @@ src/
     xml_lite.h/.cpp      只解析 XmlSerializer 输出子集（settings.xml 导入用）
     settings.h/.cpp      AppSettings（43+11 字段）、两级路径、原子写、DPAPI、导入、损坏备份、加载门禁
     log.h/.cpp           [HH:mm:ss] 行格式、三开关、900 行、5MB 轮转、线程安全
+    copy_options.h       25 个 CopyOptions 字段 + DuplicateAction/DecisionKind/reason::
+    file_filter.h/.cpp   判定顺序、通配符走 FindFirstFileExW、盘级标记 DetectDriveAction
+    name_util.h/.cpp     目录名清洗（1:1）+ BuildDriveFolderName（D34：序列号不许被截）
+    copy_callbacks.h/.cpp CopyCallbacks 四回调 + Counters（D30：每个最终决策立即上报）
   client/
     app/
       main.cpp           WinMain、单实例、COM、通用控件初始化、--tab 解析
@@ -93,6 +97,10 @@ tools/
   单机版用 `settings.lite.json`，与完整版**永不共享**配置文件（避免单机版重置掉服务器配置）。
 - **损坏配置**：解析失败时先把文件改名 `settings.json.corrupt`（重名加时间戳）再回退默认值，
   避免下一次保存把用户 43 个字段永久覆盖。
+- **目录命名**（M2 的关键不变量）：`{卷标或盘符}_{卷序列号}`，正向建目录与反向找目录
+  必须走同一个 `BuildDriveFolderName`。C# 的 `SanitizeFolderName` 把 `"前 45 + ~"` 作用在
+  **拼好的整体**上，长卷标会把序列号一起截掉（→ 反向复制永远找不到目录），
+  所以这里**先按预算截断卷标（8 位序列号时上限 40），再拼完整序列号**（基线偏差 D34）。
 - **DPAPI**：`CryptProtectData(CurrentUser)` + 固定 entropy（`U盘文件复制器_SALT_2024` 的 UTF-8，
   29 字节），密文以 **Base64** 存盘，与 C# 版可互相解密。
   改这块后必须跑 `tools\interop\verify_dpapi_settings.py`（让 C# 版真实参与一次加解密）。

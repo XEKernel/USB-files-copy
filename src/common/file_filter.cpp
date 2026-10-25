@@ -93,6 +93,33 @@ FileDecision EvaluateFileBasics(const std::wstring& fileName, DWORD attributes,
     return {};
 }
 
+DriveAction DetectDriveAction(const std::wstring& driveRoot, const CopyOptions& options,
+                              std::wstring* markerPath) {
+    // 顺序与 C# 一致：stop.copy 先判，命中即返回（两个都在时"停复制"优先）
+    if (options.stopCopyWhenFileExists && !options.stopCopyFileName.empty()) {
+        const std::wstring candidate = path::Combine(driveRoot, options.stopCopyFileName);
+        if (path::FileExists(candidate)) {
+            if (markerPath != nullptr) {
+                *markerPath = candidate;
+            }
+            return DriveAction::StopCopy;
+        }
+    }
+    if (options.reverseCopyWhenFileExists && !options.reverseCopyFileName.empty()) {
+        const std::wstring candidate = path::Combine(driveRoot, options.reverseCopyFileName);
+        if (path::FileExists(candidate)) {
+            if (markerPath != nullptr) {
+                *markerPath = candidate;
+            }
+            return DriveAction::ReverseCopy;
+        }
+    }
+    if (markerPath != nullptr) {
+        markerPath->clear();
+    }
+    return DriveAction::None;
+}
+
 FileDecision EvaluateDirectory(const std::wstring& dirName, DWORD attributes) {
     if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
         return {DecisionKind::Skip, reason::kReparsePoint};

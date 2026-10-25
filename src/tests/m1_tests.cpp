@@ -17,6 +17,7 @@
 #include "file_filter.h"
 #include "json.h"
 #include "log.h"
+#include "name_util.h"
 #include "path_util.h"
 #include "settings.h"
 #include "win_util.h"
@@ -1464,6 +1465,129 @@ void TestCounters() {
     CHECK_INT(recorder.notifyCount, 5);
 }
 
+// ============================================================================
+// name_util：目录名清洗与「序列号不许被截掉」（D34）
+// ============================================================================
+void TestNameUtil(const std::wstring& root) {
+    Section("name_util: 清洗六步 + 序列号完整性（D34）");
+
+    // ① 空/空白 → UNKNOWN_DRIVE
+    CHECK_TEXT(copy::SanitizeFolderName(L""), L"UNKNOWN_DRIVE");
+    CHECK_TEXT(copy::SanitizeFolderName(L"   "), L"UNKNOWN_DRIVE");
+
+    // ② 非法字符剔除（含盘符冒号、斜杠、控制字符）
+    CHECK_TEXT(copy::SanitizeFolderName(L"A/B:C*D?E\"F<G>H|I"), L"ABCDEFGHI");
+    CHECK_TEXT(copy::SanitizeFolderName(std::wstring(L"X") + static_cast<wchar_t>(0x01) + L"Y"),
+               L"XY");
+
+    // ③ Trim 只去首尾空白，**不去尾随点**（C# `.Trim()` 如此）
+    CHECK_TEXT(copy::SanitizeFolderName(L"  AB  "), L"AB");
+    CHECK_TEXT(copy::SanitizeFolderName(L"NAME."), L"NAME.");
+
+    // ④ 设备名 → **追加**后缀 _DATA（不是前缀）；只比整体，不剥扩展名
+    CHECK_TEXT(copy::SanitizeFolderName(L"CON"), L"CON_DATA");
+    CHECK_TEXT(copy::SanitizeFolderName(L"con"), L"con_DATA");
+    CHECK_TEXT(copy::SanitizeFolderName(L"Lpt9"), L"Lpt9_DATA");
+    CHECK_TEXT(copy::SanitizeFolderName(L"CON.txt"), L"CON.txt"); // 不剥扩展名比较
+    CHECK(copy::IsReservedDeviceName(L"COM7"));
+    CHECK(!copy::IsReservedDeviceName(L"COM10")); // C# 列表只到 COM9
+
+    // ⑤ 长度：50 不变，51 → 前 45 + `~`（1:1 复刻 C#，D34 只改拼装层）
+    const std::wstring fifty(50, L'A');
+    CHECK_TEXT(copy::SanitizeFolderName(fifty), fifty);
+    const std::wstring fiftyOne(51, L'A');
+    const std::wstring truncated = copy::SanitizeFolderName(fiftyOne);
+    CHECK_INT(truncated.size(), 46);
+    CHECK_TEXT(truncated, std::wstring(45, L'A') + L"~");
+
+    // ---- ⑥ BuildDriveFolderName：拼装层 ----
+    const std::wstring serial = L"1A2B3C4D"; // A1 的 %08X 形态（实际值待真机验证）
+
+    // 短卷标：与 C# 完全一致
+    CHECK_TEXT(copy::BuildDriveFolderName(L"KINGSTON", L"E", serial), L"KINGSTON_1A2B3C4D");
+    // 卷标为空 → 用盘符
+    CHECK_TEXT(copy::BuildDriveFolderName(L"", L"E", serial), L"E_1A2B3C4D");
+    CHECK_TEXT(copy::BuildDriveFolderName(L"   ", L"F", serial), L"F_1A2B3C4D");
+    // 卷标含非法字符 → 先清洗再拼
+    CHECK_TEXT(copy::BuildDriveFolderName(L"MY:DISK", L"E", serial), L"MYDISK_1A2B3C4D");
+    // 恰好 50：不截断
+    const std::wstring label41(41, L'A');
+    const std::wstring exact = copy::BuildDriveFolderName(label41, L"E", serial);
+    CHECK_INT(exact.size(), 50);
+    CHECK(exact.find(serial) != std::wstring::npos);
+
+    // **核心断言（D34）**：长卷标必须保住序列号，否则反向复制永远找不到目录
+    const std::wstring longLabel(50, L'B');
+    const std::wstring longName = copy::BuildDriveFolderName(longLabel, L"E", serial);
+    CHECK_INT(longName.size(), 50);
+    CHECK(longName.find(serial) != std::wstring::npos);
+    CHECK(std::wstring::npos != longName.find(L"~_")); // 有截断标记
+    std::printf("    [probe] 50 字卷标 -> \"%s\"（C# 会得到 \"%s\"，序列号丢失）\n",
+                util::ToUtf8(longName).c_str(), util::ToUtf8(fiftyOne.substr(0, 45) + L"~").c_str());
+
+    // 更长卷标：仍然 50 且含序列号
+    const std::wstring hugeLabel(200, L'C');
+    const std::wstring hugeName = copy::BuildDriveFolderName(hugeLabel, L"E", serial);
+    CHECK_INT(hugeName.size(), 50);
+    CHECK(hugeName.find(serial) != std::wstring::npos);
+
+    // 退化输入：空串序列号 → 纯卷标（C# 的 GetDriveId 实际返回 "UNKNOWN"，不是空串）
+    CHECK_TEXT(copy::BuildDriveFolderName(L"KINGSTON", L"E", L""), L"KINGSTON");
+    // 与 C# 对齐：读不到序列号时是 "UNKNOWN"
+    CHECK_TEXT(copy::BuildDriveFolderName(L"KINGSTON", L"E", L"UNKNOWN"),
+               L"KINGSTON_UNKNOWN");
+
+    // 目录树文件名（过的是卷标本身，不是 卷标_序列号）
+    SYSTEMTIME stamp{};
+    stamp.wYear = 2026;
+    stamp.wMonth = 10;
+    stamp.wDay = 25;
+    stamp.wHour = 10;
+    stamp.wMinute = 15;
+    stamp.wSecond = 0;
+    CHECK_TEXT(copy::BuildDirectoryTreeFileName(L"KINGSTON", stamp),
+               L"KINGSTON_目录树_20261025_101500.txt");
+    // 卷标为空时 C# 传的是盘符，这里同样落在 UNKNOWN_DRIVE 上（调用方负责传盘符）
+    CHECK_TEXT(copy::BuildDirectoryTreeFileName(L"", stamp),
+               L"UNKNOWN_DRIVE_目录树_20261025_101500.txt");
+
+    // ---- 盘级标记（与文件级判定分开，P1-7）----
+    const std::wstring driveRoot = path::Combine(root, L"drive");
+    CHECK(settings::EnsureDirectory(driveRoot));
+
+    copy::CopyOptions options;
+    options.stopCopyWhenFileExists = true;
+    options.reverseCopyWhenFileExists = true;
+
+    std::wstring marker;
+    CHECK(copy::DetectDriveAction(driveRoot, options, &marker) == copy::DriveAction::None);
+    CHECK(marker.empty());
+
+    CHECK(WriteBytes(path::Combine(driveRoot, L"reverse.copy"), "r"));
+    CHECK(copy::DetectDriveAction(driveRoot, options, &marker) == copy::DriveAction::ReverseCopy);
+    CHECK_TEXT(path::FileName(marker), L"reverse.copy");
+
+    // 两个都在 → StopCopy 优先（C# 先判 stop.copy）
+    CHECK(WriteBytes(path::Combine(driveRoot, L"stop.copy"), "s"));
+    CHECK(copy::DetectDriveAction(driveRoot, options, &marker) == copy::DriveAction::StopCopy);
+    CHECK_TEXT(path::FileName(marker), L"stop.copy");
+
+    // 开关关闭时即使文件在也不动作
+    copy::CopyOptions off;
+    off.stopCopyWhenFileExists = false;
+    off.reverseCopyWhenFileExists = false;
+    CHECK(copy::DetectDriveAction(driveRoot, off, &marker) == copy::DriveAction::None);
+
+    // 标记文件自身在**文件级**被跳过（copy.stop / .reverse_copied）
+    const copy::FileDecision indicator =
+        copy::EvaluateFileBasics(L"copy.stop", FILE_ATTRIBUTE_NORMAL, options, false);
+    CHECK(indicator.kind == copy::DecisionKind::Skip);
+    CHECK_TEXT(indicator.reason, L"marker-file");
+    const copy::FileDecision markerRev =
+        copy::EvaluateFileBasics(L".reverse_copied", FILE_ATTRIBUTE_NORMAL, options, true);
+    CHECK(markerRev.kind == copy::DecisionKind::Skip);
+}
+
 } // namespace
 
 // 探针模式：m1_tests.exe --import-xml <settings.xml>
@@ -1567,6 +1691,7 @@ int wmain(int argc, wchar_t** argv) {
     TestPathResolution();
     TestXmlLite();
     TestFileFilter(root);
+    TestNameUtil(root);
     TestCounters();
     TestLog(root);
 
