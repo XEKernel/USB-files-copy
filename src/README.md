@@ -50,7 +50,7 @@ src/
     path_util.h/.cpp     归一化、.. 拒绝、目录边界（OrdinalIgnoreCase）、\\?\ 长路径、reparse point
     json.h/.cpp          极简 JSON（int64 保真、键保序、深度 64）
     xml_lite.h/.cpp      只解析 XmlSerializer 输出子集（settings.xml 导入用）
-    settings.h/.cpp      AppSettings（43+11 字段）、三段路径、原子写、DPAPI、导入、加载门禁
+    settings.h/.cpp      AppSettings（43+11 字段）、两级路径、原子写、DPAPI、导入、损坏备份、加载门禁
     log.h/.cpp           [HH:mm:ss] 行格式、三开关、900 行、5MB 轮转、线程安全
   client/
     app/
