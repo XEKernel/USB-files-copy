@@ -912,6 +912,28 @@ void TestPathResolution() {
 
     // 目录缓存与文件一致
     CHECK_TEXT(store.Directory(), path::DirectoryName(resolved));
+
+    // 回退目标本身可用（本机 exe 目录可写，所以解析不会走到这里；
+    // 但 M3 搬到 Program Files 后靠的就是这两级，先确认它们真的能写）
+    const std::wstring roamingDir = settings::RoamingDirectory();
+    CHECK_TEXT(path::FileName(roamingDir), L"UsbCopy");
+    const bool roamingExisted = path::IsDirectory(roamingDir);
+    if (!roamingExisted) {
+        CHECK(settings::EnsureDirectory(roamingDir));
+    }
+    CHECK(path::IsDirectoryWritable(roamingDir));
+    if (!roamingExisted) {
+        // 测试不留残留：只删自己刚建的空目录
+        RemoveDirectoryW(path::ToExtended(roamingDir).c_str());
+    }
+
+    const std::wstring desktopDir = settings::DesktopDirectory();
+    CHECK(!desktopDir.empty());
+    CHECK(path::IsDirectory(desktopDir));
+    CHECK(path::IsDirectoryWritable(desktopDir));
+
+    // C# 遗留目录名是中文（用于导入，不用于存放）
+    CHECK_TEXT(path::FileName(settings::LegacyRoamingDirectory()), L"U盘文件复制器");
 }
 
 void TestXmlLite() {

@@ -17,7 +17,7 @@
 .\build.ps1                 # 完整版    → out\bin\release\UsbCopy.exe
 .\build.ps1 -Lite           # 单机版    → out\bin\release-lite\UsbCopyLite.exe
 .\build.ps1 -Config debug   # 调试版（/Od /Zi + PDB）
-.\build.ps1 -Tests          # M1 测试   → out\bin\release-tests\m1_tests.exe（400 项检查）
+.\build.ps1 -Tests          # M1 测试   → out\bin\release-tests\m1_tests.exe（407 项检查）
 .\build.ps1 -Tests -Run     # 构建并直接跑测试
 .\build.ps1 -Lite -Run      # 构建并启动
 ```
