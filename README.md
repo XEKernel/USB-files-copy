@@ -4,6 +4,13 @@
 ![.NET 8](https://img.shields.io/badge/Server-.NET%208-purple)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+
+> [!IMPORTANT]
+> **本项目已列入重构计划（进行中）** —— 早期代码由 AI 快速堆叠而成，缺少模块边界与约束，维护成本较高。
+> 当前按模块逐个清理，主干分支可能处于半改状态。
+> **请优先使用 [Releases](https://github.com/XEKernel/USB-files-copy/releases) 中的构建**，而不是直接编译 main。
+
+
 U盘文件自动备份工具，支持本地存储和远程服务器双模式，配备 Web 管理面板和远程目录浏览功能。
 
 ## 项目结构
@@ -316,6 +323,15 @@ dotnet run
 - 客户端按 Forms/ Storage/ 分层重组
 - 清理死代码、AI 占位注释、误标 auto-generated 等屎山
 
+## 开发方式
+
+本项目**主要由 AI 辅助完成**：作者负责需求定义、架构取舍与验收测试，具体代码实现大量由 AI 生成。
+
+早期开发阶段提示词工程欠缺 —— 上下文给得随意、约束条件没写清、模块边界也没提前划定，
+导致部分实现耦合偏高，改动容易牵一发动全身。后续开发已改为**先定接口与模块边界，再让 AI 产出实现**。
+
+二次开发建议：先读目录结构与核心类，确认数据流向，再动代码。
+
 ## 许可证
 
 MIT License
@@ -323,4 +339,4 @@ MIT License
 ---
 
 *最后更新：2026年8月*
-*版本：V1.5.0*
+*版本：v1.7.2.0*（完整更新记录见 [Releases](https://github.com/XEKernel/USB-files-copy/releases)）
