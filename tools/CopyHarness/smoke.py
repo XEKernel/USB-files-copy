@@ -71,7 +71,8 @@ def build_tree():
     set_attr(write("system.txt"), FILE_ATTRIBUTE_SYSTEM)
 
 
-def run(name, options, cancel_ms=0, clean=True, no_record=False, src=None, dst=None):
+def run(name, options, cancel_ms=0, clean=True, no_record=False, src=None, dst=None,
+        emit_log=False):
     options_path = os.path.join(WORK, "options_%s.json" % name)
     with open(options_path, "w", encoding="utf-8") as handle:
         json.dump(options, handle, ensure_ascii=False)
@@ -85,6 +86,8 @@ def run(name, options, cancel_ms=0, clean=True, no_record=False, src=None, dst=N
         args.extend(["--cancel-after", str(cancel_ms)])
     if no_record:
         args.append("--no-record-insertion")
+    if emit_log:
+        args.append("--emit-log")
 
     started = time.time()
     result = subprocess.run(args, capture_output=True)
@@ -193,6 +196,13 @@ def main():
           "schema: batch 的 index 从 1 起、direction=forward")
     check("startedFt" in rows[0] and isinstance(rows[0]["startedFt"], int),
           "schema: batch.startedFt 必须是 int64 FILETIME")
+    rows, _ = run("schema_log", {}, emit_log=True)
+    log_rows = [r for r in rows if r.get("kind") == "log"]
+    check(bool(log_rows), "schema: --emit-log 应产出 log 行")
+    check(all(r.get("level") in ("info", "error") for r in log_rows),
+          "schema: log.level 只能是 info/error")
+    check(all("message" in r for r in log_rows), "schema: log 行必须有 message")
+
     dir_rows = [r for r in rows if r.get("kind") == "dir"]
     check(all(":" not in r["path"] for r in dir_rows),
           "schema: dir.path 必须是相对路径（绝对路径两侧必然不同，无法比对）")

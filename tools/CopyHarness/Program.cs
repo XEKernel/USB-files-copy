@@ -82,6 +82,7 @@ namespace UsbCopy.Harness
     {
         private static readonly object Sync = new object();
         private static readonly List<string> RawLog = new List<string>();
+        private static readonly List<bool> RawLogIsError = new List<bool>();
 
         private static int Main(string[] args)
         {
@@ -132,6 +133,7 @@ namespace UsbCopy.Harness
                 lock (Sync)
                 {
                     RawLog.Add(message);
+                    RawLogIsError.Add(isError); // log 行的 level 字段（C# 的 isError 语义，D11）
                 }
             };
 
@@ -223,12 +225,15 @@ namespace UsbCopy.Harness
             }
             if (options.EmitLog)
             {
-                foreach (var message in log)
+                for (int index = 0; index < log.Count; index++)
                 {
                     lines.Add(new JObject
                     {
                         ["kind"] = "log",
-                        ["message"] = message
+                        ["level"] = index < RawLogIsError.Count && RawLogIsError[index]
+                            ? "error"
+                            : "info",
+                        ["message"] = log[index]
                     }.ToString(Formatting.None));
                 }
             }
