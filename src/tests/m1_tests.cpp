@@ -1306,6 +1306,13 @@ void TestFileFilter(const std::wstring& root) {
         copy::CollectMatchedNames(dir, {L"*.txt", L"*.*"});
     CHECK(matched.size() >= 5); // *.* 覆盖全部 5 个
 
+    // D37：模式重叠时同一文件只能出现一次
+    // （`*.doc` 经 8.3 短名也匹配 tricky.docx，C# 会把它处理两次；实测 KeepBoth 会生成
+    //   `tricky (1).docx`。C++ 引擎用 CollectMatchedNames 取并集后只处理一次）
+    const std::vector<std::wstring> overlap = copy::CollectMatchedNames(dir, {L"*.doc", L"*.docx"});
+    CHECK_INT(overlap.size(), 1);
+    CHECK_TEXT(overlap.front(), L"tricky.docx");
+
     copy::CopyOptions options;
 
     // 属性
@@ -1458,11 +1465,25 @@ void TestCounters() {
     CHECK_INT(recorder.lastSuccess, counters.success());
     CHECK_INT(recorder.lastFailure, counters.failure());
 
+    // D38：取消单独区分（数字与 fail 相同，action=cancel）
+    counters.Cancel(L"half.bin");
+    CHECK_INT(counters.total(), 4);
+    CHECK_INT(counters.failure(), 3);
+    CHECK_INT(recorder.notifyCount, 5);
+    CHECK(recorder.lastKind == copy::DecisionKind::Cancelled);
+    CHECK_TEXT(recorder.lastReason, L"cancelled");
+    CHECK_TEXT(copy::DecisionKindText(copy::DecisionKind::Cancelled), L"cancel");
+
+    // P0-5 的不变量：total 恒等于 success + failure
+    // （每个"最终结论"要么成功要么失败，普通 Skip 不参与；若有人把 total 改成
+    //   "发现的文件数"，这条立刻失败）
+    CHECK_INT(counters.total(), counters.success() + counters.failure());
+
     counters.Reset();
     CHECK_INT(counters.total(), 0);
     CHECK_INT(counters.success(), 0);
     CHECK_INT(counters.failure(), 0);
-    CHECK_INT(recorder.notifyCount, 5);
+    CHECK_INT(recorder.notifyCount, 6);
 }
 
 // ============================================================================

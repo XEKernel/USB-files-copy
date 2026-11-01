@@ -89,6 +89,21 @@ harness 复刻了这一步（forward 记源盘根、reverse 记目标盘根）�
 | 限速 + 800ms 取消 | `huge.bin` → `fail`，`dstBytes=1 064 960 / 4 194 304`（**半成品**）；`countsLast=[1,1,0]` 少算一个失败 → **D30** |
 | D8 现场 | `dstFt != srcFt` → 确认 C# 不保留 mtime（M2 有意偏离） |
 
+### D37 现场：模式重叠导致重复复制（已实测）
+
+源目录 `a.docx` + `b.doc`，模式 `["*.doc","*.docx","*.txt"]`（= 界面上勾"Word"组）：
+
+| `duplicateAction` | 目标目录 | 「成功复制」行数 |
+|---|---|---|
+| `2` KeepBoth | **`a.docx` + `a (1).docx`** | 3 |
+| `1` Overwrite | `a.docx`（重写一遍） | 3 |
+| `0` Skip + `compareContent` | `a.docx` | 2 |
+
+原因：`*.doc` 在 Windows 上经 8.3 短名匹配 `a.docx`，而 `CopyEngine` 是
+`foreach pattern → foreach file`，**没有文件级去重**。C++ 在目录内对整个模式集取并集
+（基线 §17.28 / D37）。harness 的 `decisions` 是字典，会把重复折叠成一条，
+所以两侧输出仍可比；`attempts` 因此恒为 1，不参与比对。
+
 ## 唯一脆弱点：日志文案映射
 
 `ParseLog` 依赖 `CopyEngine.cs` 里那些固定前缀（`成功复制：`、`跳过文件：`、`文件过大已跳过：` …）。

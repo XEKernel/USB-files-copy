@@ -26,7 +26,8 @@ enum class DecisionKind {
     Copy,
     Skip,
     Fail,
-    NotVisited, // 源树里有、引擎没处理（深度截断/系统目录/取消）
+    NotVisited, // 源树里有、引擎没处理（深度截断/系统目录/junction 子树）
+    Cancelled,  // D38：用户取消导致的未完成（C# 记 fail，C++ 单独区分）
 };
 
 const wchar_t* DecisionKindText(DecisionKind kind);
@@ -50,6 +51,7 @@ inline constexpr const wchar_t* kAttrDir = L"attr-dir";
 inline constexpr const wchar_t* kFolderFilter = L"folder-filter";
 inline constexpr const wchar_t* kDepthLimit = L"depth-limit";
 inline constexpr const wchar_t* kNotVisited = L"not-visited";
+inline constexpr const wchar_t* kCancelled = L"cancelled"; // D38：与 fail 区分
 inline constexpr const wchar_t* kNotWhitelisted = L"not-whitelisted";
 inline constexpr const wchar_t* kStopFile = L"stop-file";
 inline constexpr const wchar_t* kReverseMarker = L"reverse-marker";
@@ -59,6 +61,10 @@ inline constexpr const wchar_t* kReverseMarker = L"reverse-marker";
 struct CopyOptions {
     std::wstring targetDirectory;                                          // 反向时=本地备份根
     std::vector<std::wstring> searchPatterns{L"*.*"};                      // 通配符（OS 语义）
+    // 注意（D37）：模式串之间**会重叠**——Word 组的 `*.doc` 在 Windows 上会通过 8.3 短名
+    // 匹配到 `a.docx`，于是同一文件被 `*.doc` 与 `*.docx` 各枚举一次。
+    // C# 不去重（实测 KeepBoth 会生成 `a (1).docx`），C++ 引擎必须在**同一目录内**
+    // 对整个模式集去重后只处理一次（用 `CollectMatchedNames`，不要写嵌套 for）。
     bool createDirectoryTree = false;
     bool limitDirectoryDepth = false;
     int maxDirectoryDepth = (std::numeric_limits<int>::max)();             // C# 默认 int.MaxValue

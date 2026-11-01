@@ -8,6 +8,7 @@ const wchar_t* DecisionKindText(DecisionKind kind) {
     case DecisionKind::Skip: return L"skip";
     case DecisionKind::Fail: return L"fail";
     case DecisionKind::NotVisited: return L"not-visited";
+    case DecisionKind::Cancelled: return L"cancel";
     }
     return L"not-visited";
 }
@@ -46,6 +47,15 @@ void Counters::Fail(const std::wstring& relativePath, const wchar_t* reason) {
     Emit(DecisionKind::Fail, relativePath, reason);
     // D30：C# 在「硬错误第一次就 break」「取消导致的失败」时只加计数器不通知，
     // 这里一律通知，保证 UI 数字与真实结果一致
+    Notify();
+}
+
+void Counters::Cancel(const std::wstring& relativePath) {
+    // 数字与 C# 一致（取消在 C# 里就是一次 fail），但 action 单独区分，
+    // 这样 headless 能表达"用户按了取消"而不是"复制出错"（D38）
+    total_.fetch_add(1);
+    failure_.fetch_add(1);
+    Emit(DecisionKind::Cancelled, relativePath, reason::kCancelled);
     Notify();
 }
 

@@ -101,6 +101,11 @@ tools/
   必须走同一个 `BuildDriveFolderName`。C# 的 `SanitizeFolderName` 把 `"前 45 + ~"` 作用在
   **拼好的整体**上，长卷标会把序列号一起截掉（→ 反向复制永远找不到目录），
   所以这里**先按预算截断卷标（8 位序列号时上限 40），再拼完整序列号**（基线偏差 D34）。
+- **模式匹配必须去重**（D37）：Word 组的 `*.doc` 在 Windows 上会通过 8.3 短名匹配 `a.docx`，
+  C# 是嵌套 `foreach` 且无文件级去重 → 实测 `KeepBoth` 下每个 `.docx` 变两份。
+  引擎必须用 `file_filter::CollectMatchedNames` 在**目录内取并集**，不要写嵌套 for。
+- **取消单独成一个 action**（D38）：C# 把 `OperationCanceledException` 吞成 `fail`，
+  C++ 输出 `action=cancel` + `skipReason=cancelled`（计数仍算 failure，与 C# 数字一致）。
 - **DPAPI**：`CryptProtectData(CurrentUser)` + 固定 entropy（`U盘文件复制器_SALT_2024` 的 UTF-8，
   29 字节），密文以 **Base64** 存盘，与 C# 版可互相解密。
   改这块后必须跑 `tools\interop\verify_dpapi_settings.py`（让 C# 版真实参与一次加解密）。
