@@ -185,6 +185,18 @@ def main():
           "cancel: 应复现 D30（countsLast 少算失败）—— countsLast=%s derived=%s"
           % (summary["countsLast"], summary["countsDerived"]))
 
+    # ---- schema 形状：首行 batch、dir 路径为相对路径 ----
+    rows, _ = run("schema", {})
+    check(rows and rows[0].get("kind") == "batch",
+          "schema: 首行必须是 kind=batch（解析器靠它识别批次边界）")
+    check(rows[0].get("index") == 1 and rows[0].get("direction") == "forward",
+          "schema: batch 的 index 从 1 起、direction=forward")
+    check("startedFt" in rows[0] and isinstance(rows[0]["startedFt"], int),
+          "schema: batch.startedFt 必须是 int64 FILETIME")
+    dir_rows = [r for r in rows if r.get("kind") == "dir"]
+    check(all(":" not in r["path"] for r in dir_rows),
+          "schema: dir.path 必须是相对路径（绝对路径两侧必然不同，无法比对）")
+
     # ---- D37：模式重叠（`*.doc` 经 8.3 短名也匹配 `a.docx`）----
     # 这组用例的目的是把「C++ 去重、C# 不去重」这个**已知偏差显式化**，
     # 而不是让它藏在字典折叠里。判据是 attempts：C# 为 2、C++ 应为 1。

@@ -144,6 +144,7 @@ namespace UsbCopy.Harness
             };
 
             var stopwatch = Stopwatch.StartNew();
+            long startedFt = DateTime.UtcNow.ToFileTimeUtc(); // batch 行的 startedFt
             bool cancelled = false;
 
             // 复刻产品的调用顺序：HandleUsbInsertedAsync 在复制前对 U 盘调
@@ -200,9 +201,21 @@ namespace UsbCopy.Harness
 
             var decisions = new Dictionary<string, Decision>(StringComparer.OrdinalIgnoreCase);
             var dirEvents = new List<JObject>();
-            ParseLog(log, copyOptions, decisions, dirEvents);
+            ParseLog(log, copyOptions, options.Source, decisions, dirEvents);
 
             var lines = new List<string>();
+
+            // batch 行：与 C++ --headless 形状一致（schema 见基线 §13）。
+            // harness 一次只跑一个批次，所以 index 恒为 1；drive 为空串（--source 直接指目录）。
+            lines.Add(new JObject
+            {
+                ["kind"] = "batch",
+                ["index"] = 1,
+                ["direction"] = options.Reverse ? "reverse" : "forward",
+                ["drive"] = "",
+                ["startedFt"] = startedFt
+            }.ToString(Formatting.None));
+
             int sourceFileCount = AppendFileLines(options, decisions, lines);
             foreach (var dirEvent in dirEvents)
             {
@@ -277,7 +290,10 @@ namespace UsbCopy.Harness
                 ["sourceFiles"] = sourceFileCount,
                 ["durationMs"] = stopwatch.ElapsedMilliseconds,
                 ["filesDecided"] = decisions.Count,
-                ["logLines"] = log.Count
+                ["logLines"] = log.Count,
+                // 与 C++ --headless 对齐：目标绝对路径 + 退出码（harness 总以 0 退出）
+                ["target"] = Path.GetFullPath(options.Target),
+                ["exitCode"] = 0
             };
             lines.Add(summary.ToString(Formatting.None));
 
@@ -372,7 +388,7 @@ namespace UsbCopy.Harness
         /// 消息文案来自 CopyEngine.cs（详见 兼容性基线.md §2.15 日志→决策映射表）；
         /// 文案一旦改动，这里的映射必须同步 —— 这是 harness 唯一脆弱点。
         /// </summary>
-        private static void ParseLog(List<string> log, CopyOptions options,
+        private static void ParseLog(List<string> log, CopyOptions options, string sourceRoot,
                                      Dictionary<string, Decision> decisions, List<JObject> dirEvents)
         {
             foreach (string message in log)
@@ -471,11 +487,15 @@ namespace UsbCopy.Harness
                     }
                     else if (message.StartsWith("跳过系统目录：", StringComparison.Ordinal))
                     {
-                        dirEvents.Add(DirEvent(message.Substring(7), ClassifyDirSkip(message.Substring(7))));
+                        dirEvents.Add(DirEvent(
+                            RelativePath(sourceRoot, message.Substring(7)),
+                            ClassifyDirSkip(message.Substring(7))));
                     }
                     else if (message.StartsWith("跳过不包含关键词的文件夹：", StringComparison.Ordinal))
                     {
-                        dirEvents.Add(DirEvent(message.Substring(13), "folder-filter"));
+                        dirEvents.Add(DirEvent(
+                            RelativePath(sourceRoot, message.Substring(13)),
+                            "folder-filter"));
                     }
                 }
                 catch (ArgumentOutOfRangeException)
@@ -565,6 +585,8 @@ namespace UsbCopy.Harness
 
         private static JObject DirEvent(string path, string reason)
         {
+            // path 必须是**相对源根的路径**：绝对路径里含临时目录名，两侧必然不同，
+            // 逐行比对会全部判不等（file 行也用相对路径，两者要一致）
             return new JObject
             {
                 ["kind"] = "dir",
@@ -616,14 +638,18 @@ namespace UsbCopy.Harness
                     ["path"] = RelativePath(options.Source, file),
                     // 比对以 first* 为准（重复枚举时 action 会被第二次决策覆盖，见 Decision 注释）
                     ["action"] = decision != null ? (decision.FirstAction ?? decision.Action) : "not-visited",
-                    ["skipReason"] = decision != null ? (decision.FirstSkipReason ?? decision.SkipReason ?? "") : "",                    ["finalAction"] = decision != null ? decision.Action : "not-visited",
+                    // not-visited 行的 skipReason 也取规范枚举值，别留空串（否则要按 action 特判）
+                    ["skipReason"] = decision != null
+                        ? (decision.FirstSkipReason ?? decision.SkipReason ?? "")
+                        : "not-visited",                    ["finalAction"] = decision != null ? decision.Action : "not-visited",
                     ["finalSkipReason"] = decision != null ? (decision.SkipReason ?? "") : "",
                     ["bytes"] = bytes,
                     ["srcFt"] = srcFt,
                     ["dstExists"] = dstExists,
                     ["dstBytes"] = dstBytes,
                     ["dstFt"] = dstFt,
-                    ["attempts"] = decision != null ? decision.Attempts : 0
+                    ["attempts"] = decision != null ? decision.Attempts : 0,
+                    ["error"] = decision != null ? (decision.Error ?? "") : ""
                 };
                 lines.Add(row.ToString(Formatting.None));
                 count++;

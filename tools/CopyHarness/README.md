@@ -57,7 +57,9 @@ CopyHarness.exe `
 
 要点：
 
-- **每源文件一行**（含 `action=not-visited`），不是"只输出处理过的"
+- 首行是 `kind=batch`（`index`/`direction`/`drive`/`startedFt`），末行是 `kind=summary`
+- **每源文件一行**（含 `action=not-visited`），不是"只输出处理过的"；
+  `not-visited` 行只作诊断，比对时两侧都要剔除（C++ 引擎不会输出这类行）
 - `srcFt` / `dstFt` 是 **FILETIME（int64，100ns）**；JSONL 里**没有任何 ISO 时间串**
   （ISO 只用于服务端 REST DTO）
 - `action` / `skipReason` = **第一次**终态决策；`finalAction` / `finalSkipReason` = 最后一次。
@@ -65,7 +67,7 @@ CopyHarness.exe `
 - `attempts` = 被处理次数；**>1 就是被重复枚举了**（D37 的可观测信号）
 - `dstExists`/`dstBytes`/`dstFt` = **运行结束时**的真实状态（与 `finalAction` 配对）
   —— 取消留下的半成品是真实值，不是 0；`--dry-run` 下是运行前状态
-- 额外有 `kind=dir`（目录级跳过：`system-dir` / `attr-dir` / `folder-filter`）与 `kind=summary`
+- 额外有 `kind=dir`（目录级跳过：`system-dir` / `attr-dir` / `folder-filter`），`dir.path` 也是**相对源根**的路径（曾输出绝对路径，两侧无法比对，已修）
 - summary 里有**两套计数**：
   - `countsLast` = 引擎 `CountsChanged` 的最后一次上报（**受 D30 缺陷影响会少算**，仅参考）
   - `countsDerived` = 从每文件决策派生的真实结果（**比对用这个**）：
