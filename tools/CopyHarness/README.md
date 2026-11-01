@@ -58,7 +58,11 @@ CopyHarness.exe `
 要点：
 
 - **每源文件一行**（含 `action=not-visited`），不是"只输出处理过的"
-- `srcFt` / `dstFt` 是 **FILETIME（int64）**，不是 ISO 字符串（后者丢亚秒，比对必误判）
+- `srcFt` / `dstFt` 是 **FILETIME（int64，100ns）**；JSONL 里**没有任何 ISO 时间串**
+  （ISO 只用于服务端 REST DTO）
+- `action` / `skipReason` = **第一次**终态决策；`finalAction` / `finalSkipReason` = 最后一次。
+  比对用前者——重复枚举时后者会变成第二次的 `skip`，直接比会让 C++ 的 `copy` 假失败
+- `attempts` = 被处理次数；**>1 就是被重复枚举了**（D37 的可观测信号）
 - 额外有 `kind=dir`（目录级跳过：`system-dir` / `attr-dir` / `folder-filter`）与 `kind=summary`
 - summary 里有**两套计数**：
   - `countsLast` = 引擎 `CountsChanged` 的最后一次上报（**受 D30 缺陷影响会少算**，仅参考）
@@ -102,7 +106,8 @@ harness 复刻了这一步（forward 记源盘根、reverse 记目标盘根）�
 原因：`*.doc` 在 Windows 上经 8.3 短名匹配 `a.docx`，而 `CopyEngine` 是
 `foreach pattern → foreach file`，**没有文件级去重**。C++ 在目录内对整个模式集取并集
 （基线 §17.28 / D37）。harness 的 `decisions` 是字典，会把重复折叠成一条，
-所以两侧输出仍可比；`attempts` 因此恒为 1，不参与比对。
+所以两侧输出仍可比。**`attempts` 能暴露重复**（C# 2 / C++ 1）——它只在 D37 用例允许不等，
+其余场景必须相等。`action` 已改为取第一次决策，否则 C++ 的 `copy` 会被 C# 的 `skip` 判成不等。
 
 ## 唯一脆弱点：日志文案映射
 

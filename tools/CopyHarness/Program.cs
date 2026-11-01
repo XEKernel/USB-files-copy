@@ -8,7 +8,8 @@
 //
 //  输出约定（每行一个 JSON 对象，紧凑、键序固定）：
 //    {"kind":"file","path":"a/b.txt","action":"copy|skip|fail|not-visited",
-//     "skipReason":"","bytes":123,"srcFt":133...,"dstExists":true,
+//     "skipReason":"","finalAction":"skip","finalSkipReason":"content-identical",
+//     "bytes":123,"srcFt":133...,"dstExists":true,
 //     "dstBytes":123,"dstFt":133...,"attempts":1}
 //    {"kind":"dir","path":"a/b","skipReason":"system-dir|attr-dir|folder-filter"}
 //    {"kind":"log","message":"..."}                      // 仅 --emit-log
@@ -16,8 +17,15 @@
 //     "cancelled":false,"countsLast":[t,s,f],"durationMs":123}
 //
 //  字段说明
-//    srcFt / dstFt = FILETIME（100ns 精度，long）。
-//      ★ 刻意不用 "yyyy-MM-ddTHH:mm:ssZ"：JSON 时间串丢了亚秒，比对必然误判不等。
+//    srcFt / dstFt = FILETIME（int64，单位 100ns）。字段名里的 `Ft` 就是 FILETIME。
+//      ★ JSONL **一律不出现** ISO 时间串：`yyyy-MM-ddTHH:mm:ssZ` 只用于服务端 REST DTO
+//        （基线 §3），两种格式互不通用；ISO 会丢掉亚秒，同一文件两侧必然判不等。
+//    action / skipReason = **第一次**终态决策（比对用这一对）
+//    finalAction / finalSkipReason = 最后一次决策（仅供参考）
+//      ★ 为什么要分：`*.doc` 经 8.3 短名也匹配 `a.docx`，C# 会把同一文件处理两次
+//        （第一次 copy、第二次 content-identical skip）。只输出最后一次会让 C++ 去重后的
+//        `copy` 与 C# 的 `skip` 判不等 —— 那是**假失败**（基线 §17.36 / D37）。
+//    attempts = 该文件被处理的次数；>1 就是"被重复枚举了"（D37 的可观测信号）
 //    action = not-visited 表示"源树里有这个文件，但引擎没做出任何决策"
 //      （被深度限制截断的目录、系统目录等），是最容易漏掉的一类差异。
 //    dstExists=true 但 action=not-visited 通常意味着取消后留下的半成品文件。
@@ -56,11 +64,18 @@ namespace UsbCopy.Harness
 
     internal sealed class Decision
     {
-        public string Action;      // copy / skip / fail
+        public string Action;      // 最后一次决策：copy / skip / fail
         public string SkipReason;
         public string RelativePath;
         public int Attempts;
         public string Error;
+
+        // 第一次终态决策（D37 用）。`*.doc` 经 8.3 短名匹配 `a.docx` 时，C# 会把同一文件
+        // 处理两次：第一次 copy、第二次 skip(content-identical)。最后写进去的是第二次，
+        // 若只输出 `Action`，C++ 去重后输出 `copy` 就会与 C# 的 `skip` 判不等 → 假失败。
+        // 所以额外输出 firstAction / firstSkipReason，比对以「第一次」为准。
+        public string FirstAction;
+        public string FirstSkipReason;
     }
 
     internal static class Program
@@ -480,6 +495,14 @@ namespace UsbCopy.Harness
                 decisions[source] = decision;
             }
             apply(decision);
+
+            // 第一次终态决策留档（Attempts 刚变成 1 的那一次）
+            // 必须显式写 ""，否则 null 会让输出端的 `?? SkipReason` 回落到**最终**原因
+            if (decision.Attempts == 1)
+            {
+                decision.FirstAction = decision.Action ?? "";
+                decision.FirstSkipReason = decision.SkipReason ?? "";
+            }
         }
 
         /// <summary>
@@ -591,8 +614,10 @@ namespace UsbCopy.Harness
                 {
                     ["kind"] = "file",
                     ["path"] = RelativePath(options.Source, file),
-                    ["action"] = decision != null ? decision.Action : "not-visited",
-                    ["skipReason"] = decision != null ? (decision.SkipReason ?? "") : "",
+                    // 比对以 first* 为准（重复枚举时 action 会被第二次决策覆盖，见 Decision 注释）
+                    ["action"] = decision != null ? (decision.FirstAction ?? decision.Action) : "not-visited",
+                    ["skipReason"] = decision != null ? (decision.FirstSkipReason ?? decision.SkipReason ?? "") : "",                    ["finalAction"] = decision != null ? decision.Action : "not-visited",
+                    ["finalSkipReason"] = decision != null ? (decision.SkipReason ?? "") : "",
                     ["bytes"] = bytes,
                     ["srcFt"] = srcFt,
                     ["dstExists"] = dstExists,

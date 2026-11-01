@@ -213,8 +213,14 @@ std::vector<std::wstring> CollectMatchesForPattern(const std::wstring& directory
 
     const std::wstring query = path::ToExtended(path::Combine(directory, pattern));
     WIN32_FIND_DATAW data{};
+    // `FIND_FIRST_EX_LARGE_FETCH` 让大目录的枚举在内部走大缓冲（纯性能，不改语义）。
+    // 极少数文件系统/重定向层会以 ERROR_INVALID_PARAMETER 拒绝这个标志，所以要有退路。
     HANDLE handle = FindFirstFileExW(query.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch,
                                      nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (handle == INVALID_HANDLE_VALUE && GetLastError() == ERROR_INVALID_PARAMETER) {
+        handle = FindFirstFileExW(query.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch,
+                                  nullptr, 0);
+    }
     if (handle == INVALID_HANDLE_VALUE) {
         return results;
     }

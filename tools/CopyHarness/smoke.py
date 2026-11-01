@@ -71,13 +71,13 @@ def build_tree():
     set_attr(write("system.txt"), FILE_ATTRIBUTE_SYSTEM)
 
 
-def run(name, options, cancel_ms=0, clean=True, no_record=False):
+def run(name, options, cancel_ms=0, clean=True, no_record=False, src=None, dst=None):
     options_path = os.path.join(WORK, "options_%s.json" % name)
     with open(options_path, "w", encoding="utf-8") as handle:
         json.dump(options, handle, ensure_ascii=False)
 
     out_path = os.path.join(WORK, "out_%s.jsonl" % name)
-    args = [HARNESS, "--source", SRC, "--target", DST,
+    args = [HARNESS, "--source", src or SRC, "--target", dst or DST,
             "--options", options_path, "--out", out_path]
     if clean:
         args.append("--clean-target")
@@ -185,6 +185,39 @@ def main():
           "cancel: 应复现 D30（countsLast 少算失败）—— countsLast=%s derived=%s"
           % (summary["countsLast"], summary["countsDerived"]))
 
+    # ---- D37：模式重叠（`*.doc` 经 8.3 短名也匹配 `a.docx`）----
+    # 这组用例的目的是把「C++ 去重、C# 不去重」这个**已知偏差显式化**，
+    # 而不是让它藏在字典折叠里。判据是 attempts：C# 为 2、C++ 应为 1。
+    d37_src = os.path.join(WORK, "d37src")
+    d37_dst = os.path.join(WORK, "d37dst")
+    os.makedirs(d37_src, exist_ok=True)
+    for fname, payload in (("a.docx", b"docx"), ("b.doc", b"doc")):
+        with open(os.path.join(d37_src, fname), "wb") as handle:
+            handle.write(payload)
+    overlap_patterns = ["*.doc", "*.docx"]
+
+    rows, _ = run("d37_keepboth_nodedup",
+                  {"searchPatterns": overlap_patterns, "duplicateAction": 2,
+                   "compareContent": False},
+                  src=d37_src, dst=d37_dst)
+    files = files_of(rows)
+    check(files["a.docx"]["attempts"] == 2,
+          "d37: C# 把 a.docx 处理了两次（attempts=2）——这是 C++ 侧去重后 attempts=1 的对照基准")
+    check(files["a.docx"]["action"] == "copy",
+          "d37: action 取**第一次**决策（copy）；只输出最后一次会变成 skip 造成假失败")
+    check(sorted(os.listdir(d37_dst)) == ["a (1).docx", "a.docx", "b.doc"],
+          "d37: KeepBoth + 内容去重关 → C# 生成两份（C++ 去重后只有一份，属有意偏差 D37）")
+
+    rows, _ = run("d37_keepboth_withdedup",
+                  {"searchPatterns": overlap_patterns, "duplicateAction": 2,
+                   "compareContent": True},
+                  src=d37_src, dst=d37_dst)
+    files = files_of(rows)
+    check(sorted(os.listdir(d37_dst)) == ["a.docx", "b.doc"],
+          "d37: 内容去重开着时 KeepBoth 不会产生第二份（去重检查在重复策略**之前**）")
+    check(files["a.docx"]["finalAction"] == "skip",
+          "d37: 第二次决策是 content-identical skip（finalAction 与 action 不同即证明重复枚举）")
+
     if not args.keep:
         shutil.rmtree(WORK, ignore_errors=True)
 
@@ -193,7 +226,7 @@ def main():
         for item in failures:
             print("FAIL " + item)
         return 1
-    print("CopyHarness 冒烟全部通过（7 个场景）")
+    print("CopyHarness 冒烟全部通过（9 个场景，含 D37 模式重叠）")
     return 0
 
 
