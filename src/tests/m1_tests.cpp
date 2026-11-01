@@ -1531,11 +1531,20 @@ void TestNameUtil(const std::wstring& root) {
     CHECK_TEXT(copy::BuildDriveFolderName(L"   ", L"F", serial), L"F_1A2B3C4D");
     // 卷标含非法字符 → 先清洗再拼
     CHECK_TEXT(copy::BuildDriveFolderName(L"MY:DISK", L"E", serial), L"MYDISK_1A2B3C4D");
-    // 恰好 50：不截断
+    // 恰好 50：不截断（41 + 1 + 8 = 50 是**边界**，41 是"不触发截断"的最大卷标长度）
     const std::wstring label41(41, L'A');
     const std::wstring exact = copy::BuildDriveFolderName(label41, L"E", serial);
     CHECK_INT(exact.size(), 50);
     CHECK(exact.find(serial) != std::wstring::npos);
+    CHECK(exact.find(L'~') == std::wstring::npos); // 没截断就不该有标记
+
+    // 42 → 必须截断：40 + `~` + `_` + 8 = 50（不是 46，也不会超 50）
+    const std::wstring label42(42, L'A');
+    const std::wstring boundary = copy::BuildDriveFolderName(label42, L"E", serial);
+    CHECK_INT(boundary.size(), 50);
+    CHECK(boundary.find(serial) != std::wstring::npos);
+    CHECK(boundary.find(L"~_") != std::wstring::npos);
+    CHECK_INT(boundary.find(L'~'), 40); // 前缀恰好 40 个字符
 
     // **核心断言（D34）**：长卷标必须保住序列号，否则反向复制永远找不到目录
     const std::wstring longLabel(50, L'B');

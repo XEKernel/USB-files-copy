@@ -63,6 +63,8 @@ CopyHarness.exe `
 - `action` / `skipReason` = **第一次**终态决策；`finalAction` / `finalSkipReason` = 最后一次。
   比对用前者——重复枚举时后者会变成第二次的 `skip`，直接比会让 C++ 的 `copy` 假失败
 - `attempts` = 被处理次数；**>1 就是被重复枚举了**（D37 的可观测信号）
+- `dstExists`/`dstBytes`/`dstFt` = **运行结束时**的真实状态（与 `finalAction` 配对）
+  —— 取消留下的半成品是真实值，不是 0；`--dry-run` 下是运行前状态
 - 额外有 `kind=dir`（目录级跳过：`system-dir` / `attr-dir` / `folder-filter`）与 `kind=summary`
 - summary 里有**两套计数**：
   - `countsLast` = 引擎 `CountsChanged` 的最后一次上报（**受 D30 缺陷影响会少算**，仅参考）
