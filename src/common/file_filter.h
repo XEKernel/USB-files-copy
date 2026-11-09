@@ -97,4 +97,10 @@ std::vector<std::wstring> CollectMatchedNames(const std::wstring& directory,
 bool MatchesAnyPattern(const std::wstring& directory, const std::wstring& fileName,
                        const std::vector<std::wstring>& patterns);
 
+// 目录下的**子目录名**（不含 "." / ".."；顺序为 FindFirstFile 返回顺序）。
+// 对应 C# `DirectoryInfo.EnumerateDirectories()`；属性由调用方另行用
+// path::Attributes 取（引擎需要它来判 system/attr/reparse）。
+// M2-A 新增：遍历必须走这里，业务代码里不出现 FindFirstFileW（硬约束 4）。
+std::vector<std::wstring> CollectSubdirectories(const std::wstring& directory);
+
 } // namespace usbcopy::copy

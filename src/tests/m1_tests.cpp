@@ -14,12 +14,14 @@
 #include <vector>
 
 #include "copy_callbacks.h"
+#include "copy_engine.h"
 #include "file_filter.h"
 #include "json.h"
 #include "log.h"
 #include "name_util.h"
 #include "path_util.h"
 #include "settings.h"
+#include "volume.h"
 #include "win_util.h"
 #include "xml_lite.h"
 
@@ -1699,6 +1701,413 @@ int RunImportProbe(const std::wstring& xmlPath) {
     return 0;
 }
 
+// ============================================================================
+//  copy_engine（M2-A）：遍历顺序 / CopyFileExW / SetFileTime / 计数 / dry-run /
+//  重复目标 / D37 模式去重 / 目录剪枝与深度 guard / 限速窗口表
+//
+//  断言口径全部来自 兼容性基线.md：
+//    §13（file 13 字段、dir 行）、§17.2（计数）、§17.24（深度）、§17.28（D37）、
+//    §17.31（total 语义）、§17.41（dry-run）、§17.46（duplicate-skip）、
+//    §17.48（dst* 取值）、§17.67（dir 行时机）
+// ============================================================================
+void TestCopyEngine(const std::wstring& root) {
+    Section("copy_engine: 遍历 / CopyFileExW / SetFileTime / 计数 / dry-run / 去重");
+
+    struct Recorder {
+        std::vector<copy::FileReport> files;
+        std::vector<std::wstring> dirPaths;
+        std::vector<std::wstring> dirReasons;
+        std::vector<std::wstring> logMessages;
+        int logCount = 0;
+        int countsNotifications = 0;
+        int lastTotal = -1;
+        int lastSuccess = -1;
+        int lastFailure = -1;
+    };
+
+    auto BuildCallbacks = [](Recorder& recorder) {
+        copy::CopyCallbacks callbacks;
+        callbacks.onLog = [&recorder](const std::wstring& message, bool) {
+            ++recorder.logCount;
+            recorder.logMessages.push_back(message);
+        };
+        callbacks.onCounts = [&recorder](int total, int success, int failure) {
+            ++recorder.countsNotifications;
+            recorder.lastTotal = total;
+            recorder.lastSuccess = success;
+            recorder.lastFailure = failure;
+        };
+        callbacks.onFileHandled = [&recorder](const copy::FileReport& report) {
+            recorder.files.push_back(report);
+        };
+        callbacks.onDirectorySkipped = [&recorder](const std::wstring& path,
+                                                   const wchar_t* reason) {
+            recorder.dirPaths.push_back(path);
+            recorder.dirReasons.push_back(reason == nullptr ? L"" : reason);
+        };
+        return callbacks;
+    };
+
+    auto FindReport = [](const std::vector<copy::FileReport>& files, const std::wstring& path)
+        -> const copy::FileReport* {
+        for (const copy::FileReport& report : files) {
+            if (report.path == path) {
+                return &report;
+            }
+        }
+        return nullptr;
+    };
+
+    auto HasReason = [](const std::vector<std::wstring>& reasons, const std::wstring& expected) {
+        for (const std::wstring& reason : reasons) {
+            if (reason == expected) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto HasLogPrefix = [](const std::vector<std::wstring>& messages, const std::wstring& prefix) {
+        for (const std::wstring& message : messages) {
+            if (message.rfind(prefix, 0) == 0) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto CountKind = [](const std::vector<copy::FileReport>& files, copy::DecisionKind kind) {
+        int count = 0;
+        for (const copy::FileReport& report : files) {
+            if (report.kind == kind) {
+                ++count;
+            }
+        }
+        return count;
+    };
+
+    const std::wstring engineRoot = path::Combine(root, L"copy_engine");
+    CHECK(settings::EnsureDirectory(engineRoot));
+
+    // ---- 1) 基本复制：a.txt(3B)/b.log(4B)/sub/c.txt(5B)，空目录不建 ----
+    const std::wstring basicSrc = path::Combine(engineRoot, L"basic_src");
+    const std::wstring basicDst = path::Combine(engineRoot, L"basic_dst");
+    CHECK(settings::EnsureDirectory(basicSrc));
+    CHECK(settings::EnsureDirectory(path::Combine(basicSrc, L"sub")));
+    CHECK(settings::EnsureDirectory(path::Combine(basicSrc, L"empty")));
+    CHECK(WriteBytes(path::Combine(basicSrc, L"a.txt"), "abc"));
+    CHECK(WriteBytes(path::Combine(basicSrc, L"b.log"), "defg"));
+    CHECK(WriteBytes(path::Combine(basicSrc, L"sub\\c.txt"), "hello"));
+
+    copy::CopyOptions basicOptions;
+    basicOptions.searchPatterns = {L"*.*"};
+    copy::EngineParams basicParams;
+    basicParams.sourceRoot = basicSrc;
+    basicParams.targetRoot = basicDst;
+
+    Recorder basic;
+    const copy::CopyCallbacks basicCallbacks = BuildCallbacks(basic);
+    const copy::EngineStats basicStats =
+        copy::RunCopyEngine(basicParams, basicOptions, basicCallbacks);
+
+    CHECK_INT(basicStats.total, 3);
+    CHECK_INT(basicStats.success, 3);
+    CHECK_INT(basicStats.failure, 0);
+    CHECK_INT(basicStats.filesDecided, 3);
+    CHECK_INT(basicStats.sourceFiles, 3);
+    CHECK(!basicStats.cancelled);
+    CHECK_INT(basic.files.size(), 3);
+    CHECK_INT(CountKind(basic.files, copy::DecisionKind::Copy), 3);
+    CHECK_INT(CountKind(basic.files, copy::DecisionKind::Skip), 0);
+    CHECK_INT(basic.logCount, 3);
+    CHECK(HasLogPrefix(basic.logMessages, L"成功复制："));
+
+    volume::FileStat sourceA{};
+    volume::FileStat targetA{};
+    CHECK(volume::StatFile(path::Combine(basicSrc, L"a.txt"), sourceA));
+    CHECK(volume::StatFile(path::Combine(basicDst, L"a.txt"), targetA));
+    CHECK(sourceA.exists);
+    CHECK(targetA.exists);
+    CHECK_INT(targetA.size, 3);
+    CHECK(sourceA.lastWriteFt != 0);
+    CHECK_INT(targetA.lastWriteFt, sourceA.lastWriteFt); // D8：写回源 mtime
+
+    volume::FileStat targetB{};
+    volume::FileStat targetC{};
+    CHECK(volume::StatFile(path::Combine(basicDst, L"b.log"), targetB));
+    CHECK(volume::StatFile(path::Combine(basicDst, L"sub\\c.txt"), targetC));
+    CHECK_INT(targetB.size, 4);
+    CHECK_INT(targetC.size, 5);
+    CHECK(path::DirectoryExists(path::Combine(basicDst, L"sub")));
+    CHECK(!path::DirectoryExists(path::Combine(basicDst, L"empty"))); // D7：空目录不建
+    CHECK_INT(basic.dirPaths.size(), 0); // 正常进入的目录没有 dir 行（§17.67）
+
+    CHECK_INT(basic.lastTotal, 3);
+    CHECK_INT(basic.lastSuccess, 3);
+    CHECK_INT(basic.lastFailure, 0);
+
+    const copy::FileReport* basicA = FindReport(basic.files, L"a.txt");
+    CHECK(basicA != nullptr);
+    if (basicA != nullptr) {
+        CHECK(basicA->kind == copy::DecisionKind::Copy);
+        CHECK(basicA->dstExists);
+        CHECK_INT(basicA->dstBytes, 3);
+        CHECK_INT(basicA->dstFt, sourceA.lastWriteFt);
+        CHECK_INT(basicA->bytes, 3);
+        CHECK_INT(basicA->attempts, 1);
+    }
+
+    // ---- 2) 文件名关键词过滤：只有 a.txt 是 copy，其余 name-filter ----
+    const std::wstring filterSrc = path::Combine(engineRoot, L"filter_src");
+    const std::wstring filterDst = path::Combine(engineRoot, L"filter_dst");
+    CHECK(settings::EnsureDirectory(filterSrc));
+    CHECK(settings::EnsureDirectory(path::Combine(filterSrc, L"sub")));
+    CHECK(WriteBytes(path::Combine(filterSrc, L"a.txt"), "abc"));
+    CHECK(WriteBytes(path::Combine(filterSrc, L"b.log"), "defg"));
+    CHECK(WriteBytes(path::Combine(filterSrc, L"sub\\c.txt"), "hello"));
+
+    copy::CopyOptions filterOptions;
+    filterOptions.searchPatterns = {L"*.*"};
+    filterOptions.filterByFileName = true;
+    filterOptions.fileNameKeywords = {L"a"};
+    copy::EngineParams filterParams;
+    filterParams.sourceRoot = filterSrc;
+    filterParams.targetRoot = filterDst;
+
+    Recorder filter;
+    const copy::CopyCallbacks filterCallbacks = BuildCallbacks(filter);
+    const copy::EngineStats filterStats =
+        copy::RunCopyEngine(filterParams, filterOptions, filterCallbacks);
+    CHECK_INT(filterStats.total, 1);
+    CHECK_INT(filterStats.success, 1);
+    CHECK_INT(filterStats.failure, 0);
+    CHECK_INT(filterStats.filesDecided, 3);
+    CHECK_INT(CountKind(filter.files, copy::DecisionKind::Skip), 2);
+    const copy::FileReport* filterB = FindReport(filter.files, L"b.log");
+    const copy::FileReport* filterC = FindReport(filter.files, L"sub/c.txt");
+    CHECK(filterB != nullptr);
+    CHECK(filterC != nullptr);
+    if (filterB != nullptr) {
+        CHECK_TEXT(filterB->reason, L"name-filter");
+        CHECK(!filterB->dstExists);
+        CHECK_INT(filterB->bytes, 4);
+    }
+    if (filterC != nullptr) {
+        CHECK_TEXT(filterC->reason, L"name-filter");
+    }
+    CHECK(!path::FileExists(path::Combine(filterDst, L"b.log")));
+
+    // ---- 3) 大小限制：唯一「跳过也计 failure」的例外（§17.2）----
+    const std::wstring sizeSrc = path::Combine(engineRoot, L"size_src");
+    const std::wstring sizeDst = path::Combine(engineRoot, L"size_dst");
+    CHECK(settings::EnsureDirectory(sizeSrc));
+    CHECK(WriteBytes(path::Combine(sizeSrc, L"big.bin"), "12345"));  // 5 字节
+    CHECK(WriteBytes(path::Combine(sizeSrc, L"small.txt"), "1234")); // 4 字节
+
+    copy::CopyOptions sizeOptions;
+    sizeOptions.searchPatterns = {L"*.*"};
+    sizeOptions.enableSizeLimit = true;
+    sizeOptions.maxSizeBytes = 4; // 严格大于：4 字节通过、5 字节跳过
+    copy::EngineParams sizeParams;
+    sizeParams.sourceRoot = sizeSrc;
+    sizeParams.targetRoot = sizeDst;
+
+    Recorder size;
+    const copy::CopyCallbacks sizeCallbacks = BuildCallbacks(size);
+    const copy::EngineStats sizeStats =
+        copy::RunCopyEngine(sizeParams, sizeOptions, sizeCallbacks);
+    CHECK_INT(sizeStats.total, 2);
+    CHECK_INT(sizeStats.success, 1);
+    CHECK_INT(sizeStats.failure, 1);
+    const copy::FileReport* sizeBig = FindReport(size.files, L"big.bin");
+    CHECK(sizeBig != nullptr);
+    if (sizeBig != nullptr) {
+        CHECK(sizeBig->kind == copy::DecisionKind::Skip);
+        CHECK_TEXT(sizeBig->reason, L"size-limit");
+        CHECK_INT(sizeBig->bytes, 5);
+        CHECK(!sizeBig->dstExists);
+    }
+    CHECK_INT(size.lastFailure, 1); // 引擎 failure 包含超大文件
+    CHECK(!path::FileExists(path::Combine(sizeDst, L"big.bin")));
+
+    // ---- 4) dryRun：不落盘，但决策仍是 copy；dst* 读运行前状态（§17.41）----
+    const std::wstring drySrc = path::Combine(engineRoot, L"dry_src");
+    const std::wstring dryDst = path::Combine(engineRoot, L"dry_dst");
+    CHECK(settings::EnsureDirectory(drySrc));
+    CHECK(WriteBytes(path::Combine(drySrc, L"a.txt"), "abc"));
+
+    copy::CopyOptions dryOptions;
+    dryOptions.searchPatterns = {L"*.*"};
+    copy::EngineParams dryParams;
+    dryParams.sourceRoot = drySrc;
+    dryParams.targetRoot = dryDst;
+    dryParams.dryRun = true;
+
+    Recorder dry;
+    const copy::CopyCallbacks dryCallbacks = BuildCallbacks(dry);
+    const copy::EngineStats dryStats =
+        copy::RunCopyEngine(dryParams, dryOptions, dryCallbacks);
+    CHECK_INT(dryStats.total, 1);
+    CHECK_INT(dryStats.success, 1);
+    CHECK_INT(dryStats.filesDecided, 1);
+    CHECK_INT(CountKind(dry.files, copy::DecisionKind::Copy), 1);
+    const copy::FileReport* dryA = FindReport(dry.files, L"a.txt");
+    CHECK(dryA != nullptr);
+    if (dryA != nullptr) {
+        CHECK(!dryA->dstExists);
+        CHECK_INT(dryA->dstBytes, 0);
+        CHECK_INT(dryA->dstFt, 0);
+    }
+    CHECK(!path::DirectoryExists(dryDst)); // 连目标根都不建
+
+    // ---- 5) 目标已存在：duplicate-skip，total 不变（§17.46）----
+    Recorder duplicate;
+    const copy::CopyCallbacks duplicateCallbacks = BuildCallbacks(duplicate);
+    const copy::EngineStats duplicateStats =
+        copy::RunCopyEngine(basicParams, basicOptions, duplicateCallbacks);
+    CHECK_INT(duplicateStats.total, 0);
+    CHECK_INT(duplicateStats.success, 0);
+    CHECK_INT(duplicateStats.failure, 0);
+    CHECK_INT(duplicateStats.filesDecided, 3);
+    CHECK_INT(CountKind(duplicate.files, copy::DecisionKind::Skip), 3);
+    CHECK_INT(duplicate.countsNotifications, 0); // 普通 Skip 不触发 onCounts（§17.31）
+    const copy::FileReport* duplicateA = FindReport(duplicate.files, L"a.txt");
+    CHECK(duplicateA != nullptr);
+    if (duplicateA != nullptr) {
+        CHECK_TEXT(duplicateA->reason, L"duplicate-skip");
+        CHECK(duplicateA->dstExists);
+        CHECK_INT(duplicateA->dstBytes, 3);
+        CHECK_INT(duplicateA->dstFt, sourceA.lastWriteFt);
+    }
+
+    // ---- 6) D37：*.doc 经 8.3 短名也匹配 a.docx → 并集去重后只处理一次 ----
+    const std::wstring overlapSrc = path::Combine(engineRoot, L"overlap_src");
+    const std::wstring overlapDst = path::Combine(engineRoot, L"overlap_dst");
+    CHECK(settings::EnsureDirectory(overlapSrc));
+    CHECK(WriteBytes(path::Combine(overlapSrc, L"a.docx"), "xy"));
+
+    copy::CopyOptions overlapOptions;
+    overlapOptions.searchPatterns = {L"*.doc", L"*.docx"};
+    copy::EngineParams overlapParams;
+    overlapParams.sourceRoot = overlapSrc;
+    overlapParams.targetRoot = overlapDst;
+
+    Recorder overlap;
+    const copy::CopyCallbacks overlapCallbacks = BuildCallbacks(overlap);
+    const copy::EngineStats overlapStats =
+        copy::RunCopyEngine(overlapParams, overlapOptions, overlapCallbacks);
+    CHECK_INT(overlapStats.filesDecided, 1);
+    CHECK_INT(overlap.files.size(), 1);
+    CHECK_INT(overlapStats.total, 1);
+    CHECK(path::FileExists(path::Combine(overlapDst, L"a.docx")));
+    CHECK_INT(FileSize(path::Combine(overlapDst, L"a.docx")), 2);
+
+    // ---- 7) 目录剪枝：system-dir / attr-dir / folder-filter 各一条 dir 事件 ----
+    const std::wstring pruneSrc = path::Combine(engineRoot, L"prune_src");
+    const std::wstring pruneDst = path::Combine(engineRoot, L"prune_dst");
+    const std::wstring hiddenDir = path::Combine(pruneSrc, L"hidden_dir");
+    CHECK(settings::EnsureDirectory(pruneSrc));
+    CHECK(settings::EnsureDirectory(path::Combine(pruneSrc, L"keep")));
+    CHECK(settings::EnsureDirectory(path::Combine(pruneSrc, L"skipme")));
+    CHECK(settings::EnsureDirectory(path::Combine(pruneSrc, L"System Volume Information")));
+    CHECK(settings::EnsureDirectory(hiddenDir));
+    CHECK(WriteBytes(path::Combine(pruneSrc, L"root.txt"), "r"));
+    CHECK(WriteBytes(path::Combine(pruneSrc, L"keep\\a.txt"), "abc"));
+    CHECK(WriteBytes(path::Combine(pruneSrc, L"skipme\\b.txt"), "b"));
+    CHECK(WriteBytes(path::Combine(pruneSrc, L"System Volume Information\\x.txt"), "x"));
+    CHECK(WriteBytes(path::Combine(hiddenDir, L"h.txt"), "h"));
+    CHECK(SetFileAttributesW(path::ToExtended(hiddenDir).c_str(), FILE_ATTRIBUTE_HIDDEN) != FALSE);
+
+    copy::CopyOptions pruneOptions;
+    pruneOptions.searchPatterns = {L"*.*"};
+    pruneOptions.filterByFolderName = true;
+    pruneOptions.folderNameKeywords = {L"keep"};
+    copy::EngineParams pruneParams;
+    pruneParams.sourceRoot = pruneSrc;
+    pruneParams.targetRoot = pruneDst;
+
+    Recorder prune;
+    const copy::CopyCallbacks pruneCallbacks = BuildCallbacks(prune);
+    const copy::EngineStats pruneStats =
+        copy::RunCopyEngine(pruneParams, pruneOptions, pruneCallbacks);
+    CHECK_INT(pruneStats.total, 2); // root.txt + keep/a.txt
+    CHECK_INT(pruneStats.success, 2);
+    CHECK_INT(pruneStats.filesDecided, 2);
+    CHECK_INT(prune.dirPaths.size(), 3);
+    CHECK(HasReason(prune.dirReasons, L"system-dir"));
+    CHECK(HasReason(prune.dirReasons, L"attr-dir"));
+    CHECK(HasReason(prune.dirReasons, L"folder-filter"));
+    CHECK(path::FileExists(path::Combine(pruneDst, L"root.txt")));
+    CHECK(path::FileExists(path::Combine(pruneDst, L"keep\\a.txt")));
+    CHECK(!path::DirectoryExists(path::Combine(pruneDst, L"skipme")));
+    CHECK(!path::DirectoryExists(path::Combine(pruneDst, L"System Volume Information")));
+    CHECK(!path::DirectoryExists(path::Combine(pruneDst, L"hidden_dir")));
+    SetFileAttributesW(path::ToExtended(hiddenDir).c_str(), FILE_ATTRIBUTE_NORMAL); // 收尾还原
+
+    // ---- 8) 深度 guard：只阻断递归，且 depth-limit 不产生 dir 行（§17.24）----
+    const std::wstring depthDst = path::Combine(engineRoot, L"depth_dst");
+    copy::CopyOptions depthOptions;
+    depthOptions.searchPatterns = {L"*.*"};
+    depthOptions.limitDirectoryDepth = true;
+    depthOptions.maxDirectoryDepth = 0;
+    copy::EngineParams depthParams;
+    depthParams.sourceRoot = pruneSrc;
+    depthParams.targetRoot = depthDst;
+
+    Recorder depth;
+    const copy::CopyCallbacks depthCallbacks = BuildCallbacks(depth);
+    const copy::EngineStats depthStats =
+        copy::RunCopyEngine(depthParams, depthOptions, depthCallbacks);
+    CHECK_INT(depthStats.total, 1); // 只复制根目录的 root.txt
+    CHECK_INT(depthStats.filesDecided, 1);
+    CHECK_INT(depth.dirPaths.size(), 0); // depth-limit 只写日志，不产生 dir 事件
+    CHECK(path::FileExists(path::Combine(depthDst, L"root.txt")));
+    CHECK(!path::DirectoryExists(path::Combine(depthDst, L"keep")));
+    CHECK(HasLogPrefix(depth.logMessages, L"达到目录深度限制(0)"));
+
+    // ---- 9) 限速窗口表（§17.49 / D36：同一盘只记第一次；严格比较）----
+    copy::ResetDriveInsertions();
+    CHECK(!copy::HasDriveInsertion(L"1A2B3C4D"));
+    copy::RecordDriveInsertion(L"1A2B3C4D");
+    CHECK(copy::HasDriveInsertion(L"1A2B3C4D"));
+    copy::RecordDriveInsertion(L"1A2B3C4D"); // 重复记录不改变已有窗口
+    CHECK(copy::HasDriveInsertion(L"1A2B3C4D"));
+    copy::RecordDriveInsertion(L"DEADBEEF");
+    CHECK(copy::HasDriveInsertion(L"DEADBEEF"));
+    CHECK(!copy::HasDriveInsertion(L"1a2b3c4d")); // C# Dictionary 默认区分大小写
+    copy::ForgetDriveInsertion(L"1A2B3C4D");
+    CHECK(!copy::HasDriveInsertion(L"1A2B3C4D"));
+    CHECK(copy::HasDriveInsertion(L"DEADBEEF"));
+    copy::ResetDriveInsertions();
+    CHECK(!copy::HasDriveInsertion(L"DEADBEEF"));
+
+    // ---- 10) relativeTargetDir：落点是 targetRoot\relativeTargetDir\relativeDir\name ----
+    const std::wstring relSrc = path::Combine(engineRoot, L"rel_src");
+    const std::wstring relDst = path::Combine(engineRoot, L"rel_dst");
+    CHECK(settings::EnsureDirectory(relSrc));
+    CHECK(settings::EnsureDirectory(path::Combine(relSrc, L"sub")));
+    CHECK(WriteBytes(path::Combine(relSrc, L"sub\\c.txt"), "hello"));
+
+    copy::CopyOptions relOptions;
+    relOptions.searchPatterns = {L"*.*"};
+    copy::EngineParams relParams;
+    relParams.sourceRoot = relSrc;
+    relParams.targetRoot = relDst;
+    relParams.relativeTargetDir = L"VOL_1A2B3C4D/"; // 尾部分隔符要被归一化掉
+    Recorder rel;
+    const copy::CopyCallbacks relCallbacks = BuildCallbacks(rel);
+    const copy::EngineStats relStats = copy::RunCopyEngine(relParams, relOptions, relCallbacks);
+    CHECK_INT(relStats.total, 1);
+    CHECK(path::FileExists(path::Combine(relDst, L"VOL_1A2B3C4D\\sub\\c.txt")));
+    CHECK_INT(FileSize(path::Combine(relDst, L"VOL_1A2B3C4D\\sub\\c.txt")), 5);
+    const copy::FileReport* relC = FindReport(rel.files, L"sub/c.txt");
+    CHECK(relC != nullptr); // 输出路径仍相对源根（§13 通则 2）
+    if (relC != nullptr) {
+        CHECK(relC->dstExists);
+        CHECK_INT(relC->dstBytes, 5);
+    }
+}
+
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
 
@@ -1723,6 +2132,7 @@ int wmain(int argc, wchar_t** argv) {
     TestFileFilter(root);
     TestNameUtil(root);
     TestCounters();
+    TestCopyEngine(root);
     TestLog(root);
 
     RemoveTree(root);

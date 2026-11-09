@@ -47,3 +47,6 @@ Server/appsettings.json
 
 # C++ 构建输出
 out/
+# Python（tools/compare 的 __pycache__）
+__pycache__/
+*.pyc

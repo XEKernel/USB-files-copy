@@ -18,6 +18,28 @@
 
 namespace usbcopy::copy {
 
+// 单个文件的**完整处理结果**（M2-A 起新增）。
+//
+//  为什么不能只靠 `onDecision`：基线 §13 的 B 表（kind=file）有 13 个字段，
+//  其中 `bytes/srcFt/dstExists/dstBytes/dstFt/error` 只有引擎在「决策那一刻」才知道
+//  （KeepBoth 的目标路径、取消留下的半成品都依赖它）。让 headless 事后自己回读文件，
+//  在 M2-B 的 KeepBoth / 内容去重场景就会算错，所以由引擎直接给出。
+//
+//  字段取值规则见 §17.48：dst* 一律是**处理完该文件那一刻**目标盘上的真实状态；
+//  `action=copy` 时复制已完成，因此与「运行结束时」等价。
+struct FileReport {
+    std::wstring path;              // 相对源根，'/' 分隔（§13 通则 2）
+    DecisionKind kind = DecisionKind::Copy;
+    const wchar_t* reason = reason::kNone; // 规范枚举（§13 skipReason 表）
+    long long bytes = 0;            // 源文件字节数
+    long long srcFt = 0;            // 源 mtime（FILETIME int64）
+    bool dstExists = false;         // 目标真实状态（见 §17.48）
+    long long dstBytes = 0;
+    long long dstFt = 0;
+    int attempts = 1;               // C++ 恒为 1（§17.61）
+    std::wstring error;             // 仅 Fail / Cancelled 非空
+};
+
 struct CopyCallbacks {
     // 日志。文案与 isError 语义见 兼容性基线.md §17.11
     std::function<void(const std::wstring& message, bool isError)> onLog;
@@ -29,9 +51,18 @@ struct CopyCallbacks {
     // 文件计数（对应 C# CountsChanged），每个最终决策后立即触发
     std::function<void(int total, int success, int failure)> onCounts;
 
-    // 每文件一个最终决策：headless 直接输出 JSONL，GUI 可忽略
+    // 轻量决策通知（附录 B 的原始契约；由 `Counters` 内部触发，GUI 可忽略）
     std::function<void(const std::wstring& relativePath, DecisionKind kind, const wchar_t* reason)>
         onDecision;
+
+    // 完整文件事件（M2-A 起 headless 用它输出 kind=file 行）。
+    // 与 onDecision 并存：Counters 只负责计数与轻量通知，引擎负责补全落盘结果。
+    std::function<void(const FileReport& report)> onFileHandled;
+
+    // 目录被剪枝（§17.67：只有被跳过的目录才产生 dir 行）。
+    // reason 取 system-dir / attr-dir / folder-filter / depth-limit / reparse-point
+    std::function<void(const std::wstring& relativePath, const wchar_t* reason)>
+        onDirectorySkipped;
 };
 
 // 计数 + 通知（把 §17.2 的语义与 D30 的修复封在一处，引擎与测试共用）

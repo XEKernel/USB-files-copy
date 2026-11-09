@@ -6,37 +6,42 @@
 #include <stdlib.h>
 
 #include <string>
+#include <vector>
 
 #include "MainWindow.h"
+#include "headless.h"
 #include "win_util.h"
 
 namespace {
 
 constexpr const wchar_t* kMutexName = L"Local\\UsbCopy.SingleInstance";
 
-// 解析 --tab=N（启动页），返回 0 表示未指定
-int ParseInitialTab() {
+} // namespace
+
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE /*prevInstance*/, PWSTR /*commandLine*/, int showCommand) {
+    // ---- 命令行（单实例互斥之前先判断 headless：无 UI 模式不参与单实例）----
     int argc = 0;
     LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    int tab = 0;
+    std::vector<std::wstring> args;
+    int initialTab = 0;
     if (argv != nullptr) {
         for (int i = 1; i < argc; ++i) {
-            const wchar_t* arg = argv[i];
-            if (wcsncmp(arg, L"--tab=", 6) == 0) {
-                tab = _wtoi(arg + 6);
-                if (tab < 0) {
-                    tab = 0;
+            const std::wstring arg = argv[i];
+            args.push_back(arg);
+            if (arg.rfind(L"--tab=", 0) == 0) {
+                initialTab = _wtoi(arg.c_str() + 6);
+                if (initialTab < 0) {
+                    initialTab = 0;
                 }
             }
         }
         LocalFree(argv);
     }
-    return tab;
-}
 
-} // namespace
+    if (usbcopy::app::WantsHeadless(args)) {
+        return usbcopy::app::RunHeadless(args);
+    }
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE /*prevInstance*/, PWSTR /*commandLine*/, int showCommand) {
     // ---- 单实例：已有窗口则唤起它 ----
     util::HandleGuard mutex(CreateMutexW(nullptr, TRUE, kMutexName));
     if (mutex.get() != nullptr && GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -63,7 +68,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE /*prevInstance*/, PWSTR /*comm
         return 1;
     }
 
-    MainWindow* window = MainWindow::Create(instance, showCommand, ParseInitialTab());
+    MainWindow* window = MainWindow::Create(instance, showCommand, initialTab);
     if (window == nullptr) {
         MessageBoxW(nullptr, L"主窗口创建失败，程序无法启动。", L"启动失败", MB_ICONERROR);
         if (SUCCEEDED(comResult)) {

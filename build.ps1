@@ -57,19 +57,24 @@ $commonSources = @(
     'src\common\log.cpp',
     'src\common\file_filter.cpp',
     'src\common\name_util.cpp',
-    'src\common\copy_callbacks.cpp'
+    'src\common\copy_callbacks.cpp',
+    'src\common\volume.cpp',
+    'src\common\jsonl_writer.cpp'
 )
 
 if ($Tests) {
     $name = 'm1_tests'
     $subsystem = 'CONSOLE'
-    $sources = $commonSources + @('src\tests\m1_tests.cpp')
+    # M2-A：复制引擎（src\client\app\copy_engine.cpp）无 UI 依赖，测试直接链接
+    $sources = $commonSources + @('src\client\app\copy_engine.cpp', 'src\tests\m1_tests.cpp')
     $libs = @('kernel32.lib', 'user32.lib', 'gdi32.lib', 'advapi32.lib', 'crypt32.lib',
               'shell32.lib', 'ole32.lib')
 } else {
     $name = if ($Lite) { 'UsbCopyLite' } else { 'UsbCopy' }
     $subsystem = 'WINDOWS'
     $sources = $commonSources + @(
+        'src\client\app\copy_engine.cpp',
+        'src\client\app\headless.cpp',
         'src\client\app\main.cpp',
         'src\client\app\MainWindow.cpp'
     )

@@ -261,6 +261,36 @@ bool MatchesAnyPattern(const std::wstring& directory, const std::wstring& fileNa
     return false;
 }
 
+std::vector<std::wstring> CollectSubdirectories(const std::wstring& directory) {
+    std::vector<std::wstring> results;
+    if (directory.empty()) {
+        return results;
+    }
+
+    const std::wstring query = path::ToExtended(path::Combine(directory, L"*.*"));
+    WIN32_FIND_DATAW data{};
+    HANDLE handle = FindFirstFileExW(query.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch,
+                                     nullptr, FIND_FIRST_EX_LARGE_FETCH);
+    if (handle == INVALID_HANDLE_VALUE && GetLastError() == ERROR_INVALID_PARAMETER) {
+        handle = FindFirstFileExW(query.c_str(), FindExInfoBasic, &data, FindExSearchNameMatch,
+                                  nullptr, 0);
+    }
+    if (handle == INVALID_HANDLE_VALUE) {
+        return results;
+    }
+    do {
+        if ((data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+            continue; // 只要子目录
+        }
+        if (wcscmp(data.cFileName, L".") == 0 || wcscmp(data.cFileName, L"..") == 0) {
+            continue;
+        }
+        results.emplace_back(data.cFileName);
+    } while (FindNextFileW(handle, &data));
+    FindClose(handle);
+    return results;
+}
+
 std::vector<std::wstring> ParseKeywords(const std::wstring& raw) {
     std::vector<std::wstring> results;
     size_t start = 0;
